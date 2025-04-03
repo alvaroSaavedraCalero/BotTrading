@@ -1,7 +1,7 @@
 import logging
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score
+from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score, TimeSeriesSplit
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
 from ta.momentum import RSIIndicator
@@ -11,12 +11,22 @@ from ta.volatility import AverageTrueRange
 from config.config import TARGET_THRESHOLD, RANDOM_STATE
 
 
-# Funcion para entrenar un modelo con los datos de backtesting
+# Funcion para entrenar un modelo con los datos, adaptada para series temporales
 def entrenar_modelo(model, df):
+    """
+    Entrena un modelo de clasificación usando datos históricos, adaptado para series temporales.
 
-    logging.info('Iniciando entrenamiento de modelo')
+    Args:
+        model: Instancia del modelo de scikit-learn (o compatible) a entrenar.
+        df (pd.DataFrame): DataFrame con los datos históricos (OHLCV, etc.).
 
-    df = definir_target(df)
+    Returns:
+        Modelo entrenado (best_estimator_ de GridSearchCV).
+    """
+    logging.info('Iniciando entrenamiento de modelo (versión adaptada para series temporales)')
+
+    # --- 1. Preparación de Datos y Características ---
+    df = definir_target(df) # Asegúrate que esta función exista y defina 'target'
 
     df['returns'] = df['close'].pct_change()
     df['rsi'] = RSIIndicator(df['close'], window=14).rsi()
@@ -25,66 +35,146 @@ def entrenar_modelo(model, df):
     df['ema21'] = EMAIndicator(df['close'], window=21).ema_indicator()
     df['atr'] = AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
 
+    # Eliminar filas con NaNs introducidos por indicadores/returns
     df = df.dropna()
-    #df = df[df['target'].isin([0, 2])]
 
-    features = df[['open', 'high', 'low', 'close', 'temporalidad', 'returns', 'rsi', 'macd', 'ema9', 'ema21', 'atr']].astype(float)
+    # Opcional: Filtrar clases si es necesario (evalúa si mejora tu caso)
+    # df = df[df['target'].isin([0, 2])]
+    # if df.empty:
+    #     logging.error("No quedan datos después de filtrar NaNs y/o clases.")
+    #     return None
+
+    # Definir características y objetivo
+    # Nota: Considera si 'temporalidad' debe ser tratada de otra forma (ej. one-hot encoding) si usas múltiples intervalos.
+    # Si siempre usas el mismo intervalo, esta columna será constante y no aportará información al modelo.
+    features_cols = ['open', 'high', 'low', 'close', 'temporalidad', 'returns', 'rsi', 'macd', 'ema9', 'ema21', 'atr']
+    features = df[features_cols].astype(float)
     target = df['target']
 
-    X_train, X_test, y_train, y_test = train_test_split(features, target, test_size=0.2, random_state=RANDOM_STATE, stratify=target)
+    if features.empty or target.empty:
+         logging.error("Features o Target están vacíos después del preprocesamiento.")
+         return None
 
-    # Calcular class weights
-    clases = np.unique(target)
-    pesos = compute_class_weight(class_weight='balanced', classes=clases, y=target)
+    # --- 2. División de Datos (Respetando Series Temporales) ---
+    n_splits_cv = 5 # Número de divisiones para TimeSeriesSplit y GridSearchCV/cross_val_score
+    tscv = TimeSeriesSplit(n_splits=n_splits_cv)
+
+    # Dividir en entrenamiento y prueba final (hold-out set) cronológicamente
+    # Usaremos todas las divisiones de tscv para el entrenamiento/validación cruzada,
+    # y reservaremos la última parte como conjunto de prueba final si es necesario,
+    # aunque GridSearchCV ya hace validación interna.
+    # Una forma común es entrenar/validar con tscv y luego evaluar en datos futuros no vistos.
+    # Para simplificar aquí, usaremos tscv dentro de GridSearchCV y cross_val_score directamente sobre 'features' y 'target'.
+    # Otra opción es separar manualmente:
+    test_size_ratio = 0.2 # Porcentaje para el conjunto de prueba final
+    split_index = int(len(features) * (1 - test_size_ratio))
+    X_train, X_test = features[:split_index], features[split_index:]
+    y_train, y_test = target[:split_index], target[split_index:]
+
+    if X_train.empty or X_test.empty:
+        logging.error("Conjuntos de entrenamiento o prueba vacíos después de la división temporal.")
+        return None
+
+    logging.info(f"División temporal: Entrenamiento={len(X_train)} muestras, Prueba={len(X_test)} muestras.")
+
+
+    # --- 3. Manejo de Desbalance de Clases (Calculado sobre el conjunto de entrenamiento) ---
+    clases = np.unique(y_train)
+    if len(clases) < 2:
+        logging.warning(f"Solo se encontró {len(clases)} clase(s) en el conjunto de entrenamiento. El entrenamiento podría no ser efectivo.")
+        # Podrías decidir detenerte o continuar con precaución
+        # return None # Opcional: detener si no hay suficientes clases
+
+    pesos = compute_class_weight(class_weight='balanced', classes=clases, y=y_train)
     class_weights_dict = {clase: peso for clase, peso in zip(clases, pesos)}
+    logging.info(f"Pesos de clase calculados (entrenamiento): {class_weights_dict}")
 
-    # Ajustar el grid dependiendo del modelo
+
+    # --- 4. Configuración y Búsqueda de Hiperparámetros con GridSearchCV y TimeSeriesSplit ---
+    param_grid = {} # Inicializar param_grid
     model_name = model.__class__.__name__
+    fit_params = {} # Parámetros adicionales para el método fit (como sample_weight)
+
+    # Ajustar el grid y parámetros específicos del modelo
     if model_name == 'RandomForestClassifier':
-        model.set_params(class_weight=class_weights_dict)
+        model.set_params(class_weight=class_weights_dict, random_state=RANDOM_STATE) # Añadir random_state si es aplicable
         param_grid = {
             'n_estimators': [100, 300, 500],
-            'max_depth': [3, 5, 7],
-            'max_features': ['auto', 'sqrt']
+            'max_depth': [3, 5, 7, None], # Añadido None
+            'max_features': ['sqrt', 'log2'], # Cambiado 'auto' a opciones explícitas
+            'min_samples_split': [2, 5], # Añadido
+            'min_samples_leaf': [1, 3]   # Añadido
         }
     elif model_name == 'GradientBoostingClassifier':
-        # no admite class_weight, lo usamos en sample_weight
-        sample_weight = y_train.map(class_weights_dict)
+        model.set_params(random_state=RANDOM_STATE) # Añadir random_state si es aplicable
+        # GradientBoosting no usa class_weight directamente, usamos sample_weight en fit
+        fit_params['sample_weight'] = y_train.map(class_weights_dict).fillna(1.0).values # Asegurar que todos los y_train tengan peso
         param_grid = {
             'n_estimators': [100, 300, 500],
             'max_depth': [3, 5, 7],
-            'learning_rate': [0.01, 0.05, 0.1]
+            'learning_rate': [0.01, 0.05, 0.1],
+            'subsample': [0.8, 1.0] # Añadido
         }
     elif model_name == 'XGBClassifier':
-        # XGBoost usa scale_pos_weight (peso de clase minoritaria)
-        scale_pos_weight = class_weights_dict[0] / class_weights_dict[2]
-        model.set_params(scale_pos_weight=scale_pos_weight)
+        # XGBoost puede usar scale_pos_weight para binario o sample_weight para multiclase
+        # Calcularemos sample_weight para el caso general multiclase
+        model.set_params(random_state=RANDOM_STATE) # Añadir random_state si es aplicable
+        fit_params['sample_weight'] = y_train.map(class_weights_dict).fillna(1.0).values
         param_grid = {
             'n_estimators': [100, 300, 500],
             'max_depth': [3, 5, 7],
-            'learning_rate': [0.01, 0.05, 0.1]
+            'learning_rate': [0.01, 0.05, 0.1],
+            'subsample': [0.8, 1.0], # Añadido
+            'colsample_bytree': [0.8, 1.0] # Añadido
         }
     else:
+        logging.error(f"Modelo '{model_name}' no soportado en tuning automático configurado.")
         raise ValueError(f"Modelo '{model_name}' no soportado en tuning automático")
 
-    if model_name == 'GradientBoostingClassifier':
-        grid_search = GridSearchCV(model, param_grid, cv=5, scoring='accuracy')
-        grid_search.fit(X_train, y_train, sample_weight=sample_weight)
-    else:
-        grid_search = GridSearchCV(model, param_grid, cv=5, scoring='accuracy')
-        grid_search.fit(X_train, y_train)
+    # Ejecutar GridSearchCV usando TimeSeriesSplit y métrica F1 ponderada
+    # Usamos el conjunto de entrenamiento (X_train, y_train) para la búsqueda
+    grid_search = GridSearchCV(estimator=model,
+                               param_grid=param_grid,
+                               scoring='f1_weighted', # *** Métrica cambiada a f1_weighted ***
+                               cv=tscv, # *** Usando TimeSeriesSplit para validación cruzada ***
+                               n_jobs=-1, # Usar todos los cores disponibles
+                               verbose=1) # Mostrar progreso
 
-    best_model = grid_search.best_estimator_
-    best_model.fit(X_train, y_train)
+    try:
+        grid_search.fit(X_train, y_train, **fit_params) # Pasar sample_weight si es necesario
+        logging.info(f"Mejores parámetros encontrados: {grid_search.best_params_}")
+        logging.info(f"Mejor puntuación F1 ponderada (CV en entreno): {grid_search.best_score_:.4f}")
+        best_model = grid_search.best_estimator_
 
-    scores = cross_val_score(best_model, features, target, cv=5)
-    logging.info(f"✅ Modelo entrenado correctamente. Cross-Validation Score: {scores.mean():.4f}")
+    except Exception as e:
+        logging.error(f"Error durante GridSearchCV: {e}")
+        return None
 
+
+    # --- 5. Evaluación Final (sobre el conjunto de prueba Hold-Out) ---
+    # Re-entrenar el mejor modelo con TODO el conjunto de entrenamiento (GridSearchCV puede hacerlo con refit=True por defecto)
+    # best_model = grid_search.best_estimator_ # Ya asignado arriba
+
+    # Evaluar en el conjunto de prueba que se mantuvo separado cronológicamente
     y_pred = best_model.predict(X_test)
+    logging.info("--- Evaluación en Conjunto de Prueba (Hold-Out) ---")
     logging.info(f"Classification Report:\n{classification_report(y_test, y_pred)}")
     logging.info(f"Confusion Matrix:\n{confusion_matrix(y_test, y_pred)}")
 
-    return best_model
+
+    # --- Opcional: Cross-Validation Score sobre el conjunto de entrenamiento ---
+    # Para tener una idea de la estabilidad del modelo en el tiempo ANTES del test set
+    try:
+        # Usamos X_train, y_train para esta evaluación, con la misma división temporal
+        scores = cross_val_score(best_model, X_train, y_train, cv=tscv, scoring='f1_weighted', fit_params=fit_params)
+        logging.info(f"Cross-Validation F1-Weighted Scores (en entreno): {scores}")
+        logging.info(f"✅ Modelo entrenado. Media CV F1 (entreno): {scores.mean():.4f} (+/- {scores.std() * 2:.4f})")
+    except Exception as e:
+        logging.warning(f"No se pudo calcular cross_val_score: {e}")
+
+
+    logging.info('✅ Entrenamiento de modelo finalizado.')
+    return best_model 
 
 
 # Funcion para obtener el target del entrenamiento del modelo
@@ -97,54 +187,6 @@ def definir_target(df):
     df.dropna(inplace=True)
     return df
 
-
-# Reentrena el modelo ya entrenado utilizando los resultados obtenidos en el backtest (TP o SL).
-def refinar_modelo_con_resultados(modelo, df_original, historial_trades):
-
-    X = []
-    y = []
-
-    for operacion in historial_trades:
-        resultado, entrada, salida, fecha_entrada, _ = operacion
-        etiqueta = 1 if "GANANCIA" in resultado else 0
-
-        try:
-            fila = df_original.loc[fecha_entrada:fecha_entrada].copy()
-            if fila.empty:
-                continue
-
-            fila['returns'] = fila['close'].pct_change()
-            fila['rsi'] = RSIIndicator(fila['close'], window=14).rsi()
-            fila['macd'] = MACD(fila['close']).macd_diff()
-            fila['ema9'] = EMAIndicator(fila['close'], window=9).ema_indicator()
-            fila['ema21'] = EMAIndicator(fila['close'], window=21).ema_indicator()
-            fila['atr'] = AverageTrueRange(fila['high'], fila['low'], fila['close'], window=14).average_true_range()
-
-            fila.dropna(inplace=True)
-
-            if not fila.empty:
-                features = fila[['open', 'high', 'low', 'close', 'temporalidad', 'returns',
-                                 'rsi', 'macd', 'ema9', 'ema21', 'atr']].iloc[0].values
-                X.append(features)
-                y.append(etiqueta)
-
-        except Exception as e:
-            print(f"Error procesando fila {fecha_entrada}: {e}")
-            continue
-
-    if not X:
-        print("⚠️ No se encontraron datos suficientes para refinar el modelo.")
-        return modelo
-
-    X = pd.DataFrame(X, columns=['open', 'high', 'low', 'close', 'temporalidad', 'returns',
-                                 'rsi', 'macd', 'ema9', 'ema21', 'atr'])
-    y = pd.Series(y)
-
-    print(f"📊 Refinando modelo con {len(y)} ejemplos de retroalimentación...")
-    modelo.fit(X, y)
-
-    print("✅ Modelo refinado exitosamente con feedback del backtest.")
-    return modelo
 
 
 

@@ -3,7 +3,6 @@ import logging
 import os
 from datetime import datetime
 from models.builder import crear_entrenar_modelo, cargar_modelo, guardar_modelo
-from models.trainer import refinar_modelo_con_resultados
 from backtestingService.engine import realizar_backtest
 from reports.exporter import exportar_resultados_excel, generar_dataframe_resultados, mostrar_resultados
 from binanceService.api import obtener_datos_binance
@@ -15,11 +14,11 @@ if __name__ == '__main__':
     os.system('cls' if os.name == 'nt' else 'clear')
     simbolo = "BTCUSDC"
     intervalo = "15m"
-    periodo = "10 years ago UTC"
+    periodo = "3 month ago UTC"
     ruta_modelos = rf"C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ModelosEntrenados"
     ruta_modelo_def = os.path.join(ruta_modelos, "modelo_entrenado_RandomForest_BTCUSDC_2025-04-03_09-49-23.joblib")
     
-    modelo = cargar_modelo(ruta=ruta_modelo_def)
+    modelo = crear_entrenar_modelo(ruta_modelo=None, simbolo=simbolo, temporalidad=intervalo, periodo=periodo, nombre_modelo='RandomForest')
     # XGB / GradientBoosting / RandomForest
     #modelo = crear_entrenar_modelo(ruta_modelo=None, simbolo=simbolo, temporalidad=intervalo, periodo=periodo, nombre_modelo='RandomForest')
     #df_modelo = obtener_datos_binance(simbolo=simbolo, intervalo=intervalo, periodo=periodo)   
@@ -28,15 +27,6 @@ if __name__ == '__main__':
     
     df_backtest = obtener_datos_binance(simbolo=simbolo, intervalo=intervalo, periodo=periodo)
     
-    # Realizamos el backtest para el reentrenamiento
-    balance, trades, balance_hist = realizar_backtest(df=df_backtest, model=modelo)
-    mostrar_resultados(balance_final=balance, historial_trades=trades)
-    
-    modelo = refinar_modelo_con_resultados(modelo=modelo, df_original=df_backtest, historial_trades=trades)
-    
-    guardar_modelo(model=modelo, nombre_modelo='RandomForest', simbolo=simbolo)
-    
-    # Segundo baktest para ver si el modelo ha mejorado
     balance, trades, balance_hist = realizar_backtest(df=df_backtest, model=modelo)
     mostrar_resultados(balance_final=balance, historial_trades=trades)
     
