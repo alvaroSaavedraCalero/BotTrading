@@ -96,3 +96,55 @@ def definir_target(df):
     )
     df.dropna(inplace=True)
     return df
+
+
+# Reentrena el modelo ya entrenado utilizando los resultados obtenidos en el backtest (TP o SL).
+def refinar_modelo_con_resultados(modelo, df_original, historial_trades):
+
+    X = []
+    y = []
+
+    for operacion in historial_trades:
+        resultado, entrada, salida, fecha_entrada, _ = operacion
+        etiqueta = 1 if "GANANCIA" in resultado else 0
+
+        try:
+            fila = df_original.loc[fecha_entrada:fecha_entrada].copy()
+            if fila.empty:
+                continue
+
+            fila['returns'] = fila['close'].pct_change()
+            fila['rsi'] = RSIIndicator(fila['close'], window=14).rsi()
+            fila['macd'] = MACD(fila['close']).macd_diff()
+            fila['ema9'] = EMAIndicator(fila['close'], window=9).ema_indicator()
+            fila['ema21'] = EMAIndicator(fila['close'], window=21).ema_indicator()
+            fila['atr'] = AverageTrueRange(fila['high'], fila['low'], fila['close'], window=14).average_true_range()
+
+            fila.dropna(inplace=True)
+
+            if not fila.empty:
+                features = fila[['open', 'high', 'low', 'close', 'temporalidad', 'returns',
+                                 'rsi', 'macd', 'ema9', 'ema21', 'atr']].iloc[0].values
+                X.append(features)
+                y.append(etiqueta)
+
+        except Exception as e:
+            print(f"Error procesando fila {fecha_entrada}: {e}")
+            continue
+
+    if not X:
+        print("⚠️ No se encontraron datos suficientes para refinar el modelo.")
+        return modelo
+
+    X = pd.DataFrame(X, columns=['open', 'high', 'low', 'close', 'temporalidad', 'returns',
+                                 'rsi', 'macd', 'ema9', 'ema21', 'atr'])
+    y = pd.Series(y)
+
+    print(f"📊 Refinando modelo con {len(y)} ejemplos de retroalimentación...")
+    modelo.fit(X, y)
+
+    print("✅ Modelo refinado exitosamente con feedback del backtest.")
+    return modelo
+
+
+

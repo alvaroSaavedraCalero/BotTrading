@@ -2,7 +2,8 @@
 import logging
 import os
 from datetime import datetime
-from models.builder import crear_entrenar_modelo, cargar_modelo
+from models.builder import crear_entrenar_modelo, cargar_modelo, guardar_modelo
+from models.trainer import refinar_modelo_con_resultados
 from backtestingService.engine import realizar_backtest
 from reports.exporter import exportar_resultados_excel, generar_dataframe_resultados, mostrar_resultados
 from binanceService.api import obtener_datos_binance
@@ -14,7 +15,7 @@ if __name__ == '__main__':
     os.system('cls' if os.name == 'nt' else 'clear')
     simbolo = "BTCUSDC"
     intervalo = "15m"
-    periodo = "2 month ago UTC"
+    periodo = "10 years ago UTC"
     ruta_modelos = rf"C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ModelosEntrenados"
     ruta_modelo_def = os.path.join(ruta_modelos, "modelo_entrenado_RandomForest_BTCUSDC_2025-04-03_09-49-23.joblib")
     
@@ -26,8 +27,17 @@ if __name__ == '__main__':
     #modelo = entrenar_modelo(model=modelo, df=df_modelo)
     
     df_backtest = obtener_datos_binance(simbolo=simbolo, intervalo=intervalo, periodo=periodo)
-    balance, trades, balance_hist = realizar_backtest(df=df_backtest, model=modelo)
     
+    # Realizamos el backtest para el reentrenamiento
+    balance, trades, balance_hist = realizar_backtest(df=df_backtest, model=modelo)
+    mostrar_resultados(balance_final=balance, historial_trades=trades)
+    
+    modelo = refinar_modelo_con_resultados(modelo=modelo, df_original=df_backtest, historial_trades=trades)
+    
+    guardar_modelo(model=modelo, nombre_modelo='RandomForest', simbolo=simbolo)
+    
+    # Segundo baktest para ver si el modelo ha mejorado
+    balance, trades, balance_hist = realizar_backtest(df=df_backtest, model=modelo)
     mostrar_resultados(balance_final=balance, historial_trades=trades)
     
     df_resultados = generar_dataframe_resultados(trades)
