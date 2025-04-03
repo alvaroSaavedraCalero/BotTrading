@@ -1,9 +1,12 @@
+# models/builder.py
+
 import logging
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from xgboost import XGBClassifier
 import joblib
 import os
 from datetime import datetime
+from utils.enumerados import Modelo
 
 from config.config import RANDOM_STATE, N_ESTIMATORS
 from binanceService.api import obtener_datos_binance
@@ -11,18 +14,18 @@ from models.trainer import entrenar_modelo
 
 
 # Funcion para obtener un modelo de 0 sin entrenamiento
-def generar_modelo_nuevo(nombre_modelo):
-    if nombre_modelo == 'GradientBoosting':
+def generar_modelo_nuevo(modelo=Modelo.RANDOM_FOREST):
+    if modelo == Modelo.GRADIENT_BOOSTING:
         logging.info("Generando nuevo modelo GradientBoostingClassifier...")
         modelo = GradientBoostingClassifier(n_estimators=N_ESTIMATORS, random_state=RANDOM_STATE)
-    elif nombre_modelo == 'RandomForest':
+    elif modelo == Modelo.RANDOM_FOREST:
         logging.info("Generando nuevo modelo RandomForestClassifier...")
         modelo = RandomForestClassifier(n_estimators=N_ESTIMATORS, random_state=RANDOM_STATE)
-    elif nombre_modelo == 'XGB':
+    elif modelo == 'Modelo.XGB':
         logging.info("Generando nuevo modelo XGBClassifier...")
         modelo = XGBClassifier(n_estimators=N_ESTIMATORS, random_state=RANDOM_STATE, objective='multi:softprob', num_class=3)
     else:
-        raise ValueError(f"Tipo de modelo '{nombre_modelo}' no soportado.")
+        raise ValueError(f"Tipo de modelo '{modelo.name}' no soportado.")
     
     return modelo
 
@@ -51,16 +54,16 @@ def cargar_modelo(ruta):
     
     
 # Funcion para entenar un modelo creado, o crear uno y entrenarlo
-def crear_entrenar_modelo(ruta_modelo, simbolo, temporalidad, periodo, nombre_modelo):
+def crear_entrenar_modelo(ruta_modelo, simbolo, temporalidad, periodo, modelo=Modelo.RANDOM_FOREST):
     if ruta_modelo is None:
-        model = generar_modelo_nuevo(nombre_modelo=nombre_modelo)
+        model = generar_modelo_nuevo(modelo=modelo)
     else:
         try:
             logging.info("Cargando modelo...")
             model = cargar_modelo(ruta_modelo)
         except FileNotFoundError:
             logging.info("Modelo no encontrado, generando nuevo modelo...")
-            model = generar_modelo_nuevo(nombre_modelo=nombre_modelo)
+            model = generar_modelo_nuevo(modelo=modelo)
     
         
     logging.info("Obteniendo datos...")
@@ -70,7 +73,7 @@ def crear_entrenar_modelo(ruta_modelo, simbolo, temporalidad, periodo, nombre_mo
     model = entrenar_modelo(model, df)
     
     logging.info("Guardando modelo...")
-    guardar_modelo(model, nombre_modelo, simbolo)
+    guardar_modelo(model, modelo.name, simbolo)
     logging.info("Modelo gurdado correctamente")
     
     return model

@@ -6,6 +6,7 @@ from models.builder import crear_entrenar_modelo, cargar_modelo, guardar_modelo
 from backtestingService.engine import realizar_backtest
 from reports.exporter import exportar_resultados_excel, generar_dataframe_resultados, mostrar_resultados
 from binanceService.api import obtener_datos_binance
+from utils.enumerados import Modelo
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')  
@@ -14,11 +15,11 @@ if __name__ == '__main__':
     os.system('cls' if os.name == 'nt' else 'clear')
     simbolo = "BTCUSDC"
     intervalo = "15m"
-    periodo = "3 month ago UTC"
+    periodo = "10 years ago UTC"
     ruta_modelos = rf"C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ModelosEntrenados"
     ruta_modelo_def = os.path.join(ruta_modelos, "modelo_entrenado_RandomForest_BTCUSDC_2025-04-03_09-49-23.joblib")
     
-    modelo = crear_entrenar_modelo(ruta_modelo=None, simbolo=simbolo, temporalidad=intervalo, periodo=periodo, nombre_modelo='RandomForest')
+    modelo = crear_entrenar_modelo(ruta_modelo=None, simbolo=simbolo, temporalidad=intervalo, periodo=periodo, modelo=Modelo.RANDOM_FOREST)
     # XGB / GradientBoosting / RandomForest
     #modelo = crear_entrenar_modelo(ruta_modelo=None, simbolo=simbolo, temporalidad=intervalo, periodo=periodo, nombre_modelo='RandomForest')
     #df_modelo = obtener_datos_binance(simbolo=simbolo, intervalo=intervalo, periodo=periodo)   
