@@ -21,7 +21,7 @@ def generar_modelo_nuevo(modelo=Modelo.RANDOM_FOREST):
     elif modelo == Modelo.RANDOM_FOREST:
         logging.info("Generando nuevo modelo RandomForestClassifier...")
         modelo = RandomForestClassifier(n_estimators=N_ESTIMATORS, random_state=RANDOM_STATE)
-    elif modelo == 'Modelo.XGB':
+    elif modelo == Modelo.XGB:
         logging.info("Generando nuevo modelo XGBClassifier...")
         modelo = XGBClassifier(n_estimators=N_ESTIMATORS, random_state=RANDOM_STATE, objective='multi:softprob', num_class=3)
     else:

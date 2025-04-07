@@ -15,16 +15,14 @@ if __name__ == '__main__':
     os.system('cls' if os.name == 'nt' else 'clear')
     simbolo = "BTCUSDC"
     intervalo = "15m"
-    periodo = "10 years ago UTC"
+    periodo = "3 months ago UTC"
     ruta_modelos = rf"C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ModelosEntrenados"
-    ruta_modelo_def = os.path.join(ruta_modelos, "modelo_entrenado_RandomForest_BTCUSDC_2025-04-03_09-49-23.joblib")
+    ruta_modelo_def = os.path.join(ruta_modelos, "modelo_entrenado_RANDOM_FOREST_BTCUSDC_2025-04-04_09-08-06.joblib")
     
-    modelo = crear_entrenar_modelo(ruta_modelo=None, simbolo=simbolo, temporalidad=intervalo, periodo=periodo, modelo=Modelo.RANDOM_FOREST)
     # XGB / GradientBoosting / RandomForest
-    #modelo = crear_entrenar_modelo(ruta_modelo=None, simbolo=simbolo, temporalidad=intervalo, periodo=periodo, nombre_modelo='RandomForest')
-    #df_modelo = obtener_datos_binance(simbolo=simbolo, intervalo=intervalo, periodo=periodo)   
+    modelo = crear_entrenar_modelo(ruta_modelo=None, simbolo=simbolo, temporalidad=intervalo, periodo=periodo, modelo=Modelo.GRADIENT_BOOSTING)
     
-    #modelo = entrenar_modelo(model=modelo, df=df_modelo)
+    #modelo = cargar_modelo(ruta=ruta_modelo_def)
     
     df_backtest = obtener_datos_binance(simbolo=simbolo, intervalo=intervalo, periodo=periodo)
     

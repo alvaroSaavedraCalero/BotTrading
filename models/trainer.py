@@ -310,11 +310,12 @@ def entrenar_modelo(model, df_input, target_method=TargetMethod.ORIGINAL, target
 
 
     # --- 8. Opcional: Cross-Validation Score sobre el conjunto de entrenamiento ---
+    
     logging.info("--- Cross-Validation Opcional sobre Conjunto de Entrenamiento ---")
     try:
         # Usamos X_train, y_train para esta evaluación, con la misma división temporal
         # Puede ser útil si el best_score_ de GridSearch parece demasiado bueno o inestable
-        scores = cross_val_score(best_model, X_train, y_train, cv=tscv, scoring='f1_weighted', fit_params=fit_params, n_jobs=-1)
+        scores = cross_val_score(best_model, X_train, y_train, cv=tscv, scoring='f1_weighted', params=fit_params, n_jobs=-1)
         logging.info(f"Cross-Validation F1-Weighted Scores (en entreno): {scores}")
         logging.info(f"Media CV F1 (entreno): {scores.mean():.4f} (+/- {scores.std() * 2:.4f})")
     except Exception as e:
