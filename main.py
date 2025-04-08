@@ -20,7 +20,7 @@ if __name__ == '__main__':
     ruta_modelo_def = os.path.join(ruta_modelos, "modelo_entrenado_RANDOM_FOREST_BTCUSDC_2025-04-04_09-08-06.joblib")
     
     # XGB / GradientBoosting / RandomForest
-    modelo = crear_entrenar_modelo(ruta_modelo=None, simbolo=simbolo, temporalidad=intervalo, periodo=periodo, modelo=Modelo.GRADIENT_BOOSTING)
+    modelo = crear_entrenar_modelo(ruta_modelo=None, simbolo=simbolo, temporalidad=intervalo, periodo=periodo, modelo=Modelo.XGB)
     
     #modelo = cargar_modelo(ruta=ruta_modelo_def)
     
