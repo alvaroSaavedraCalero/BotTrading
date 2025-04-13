@@ -40,36 +40,54 @@ if __name__ == '__main__':
         # --- Parámetros ---
         simbolo: str = "BTCUSDC"
         intervalo: str = "15m"
-        periodo_entrenamiento: str = "6 month ago UTC" # Separar periodo de entreno y backtest
-        periodo_backtest: str = "1 month ago UTC"
+        periodo_entrenamiento: str = "10 years ago UTC" # Separar periodo de entreno y backtest
+        periodo_backtest: str = "6 months ago UTC"
         ruta_modelos: str = rf"C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ModelosEntrenados"
         # Ejemplo de ruta para cargar un modelo específico (si se usara)
         # ruta_modelo_a_cargar: Optional[str] = os.path.join(ruta_modelos, "nombre_especifico.joblib")
-        ruta_modelo_a_cargar: Optional[str] = None # Poner None para entrenar siempre uno nuevo
+        ruta_modelo_a_cargar: Optional[str] = rf"C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ModelosEntrenados\modelo_entrenado_RANDOM_FOREST_BTCUSDC_2025-04-13_19-23-29.joblib" # Poner None para entrenar siempre uno nuevo
 
-        tipo_modelo_enum: Modelo = Modelo.XGB # Elegir el modelo a entrenar/usar
-        metodo_target: TargetMethod = TargetMethod.ORIGINAL # Elegir método de target
+        tipo_modelo_enum: Modelo = Modelo.RANDOM_FOREST # Elegir el modelo a entrenar/usar
+        metodo_target: TargetMethod = TargetMethod.ATR # Elegir método de target
         params_target: Dict[str, Any] = {} # Parámetros para el método de target (ej. {'umbral': 0.0015})
 
+        # Preguntar al usuario si desea cargar un modelo existente o entrenar uno nuevo
+        eleccion_usuario = input("¿Deseas cargar un modelo existente (C) o crear y entrenar uno nuevo (E)? [C/E]: ").strip().upper()
+
+        if eleccion_usuario not in ['C', 'E']:
+            logging.error("❌ Opción no válida. Por favor elige 'C' para cargar o 'E' para entrenar.")
+            sys.exit(1)
+
         # --- Entrenamiento o Carga del Modelo ---
-        logging.info(f"Iniciando creación/entrenamiento de modelo: {tipo_modelo_enum.name}")
-        # crear_entrenar_modelo retorna Optional[Any]
-        modelo: Optional[Any] = crear_entrenar_modelo(
-            ruta_modelo=ruta_modelo_a_cargar, # Usar la variable definida arriba
-            simbolo=simbolo,
-            temporalidad=intervalo,
-            periodo=periodo_entrenamiento, # Usar periodo de entrenamiento
-            modelo_enum=tipo_modelo_enum,
-            target_method=metodo_target, # Pasar método
-            target_params=params_target    # Pasar parámetros
-        )
+        logging.info(f"Iniciando {'carga' if eleccion_usuario == 'C' else 'creación/entrenamiento'} de modelo: {tipo_modelo_enum.name}")
 
-        # Salir si el modelo no se pudo crear/entrenar
-        if modelo is None:
-            logging.error("❌ No se pudo crear o entrenar el modelo. Terminando ejecución.")
-            sys.exit(1) # Salir con código de error
+        modelo: Optional[Any] = None
 
-        logging.info(f"✅ Modelo {tipo_modelo_enum.name} listo para usar.")
+        if eleccion_usuario == 'C':
+            # Intentar cargar el modelo desde el archivo
+            try:
+                modelo = cargar_modelo(ruta=ruta_modelo_a_cargar)
+                logging.info("✅ Modelo cargado correctamente desde el archivo.")
+            except Exception as e:
+                logging.error(f"❌ Error al cargar el modelo: {e}")
+                sys.exit(1)
+        else:
+            # Crear y entrenar el modelo
+            modelo = crear_entrenar_modelo(
+                ruta_modelo=None,
+                simbolo=simbolo,
+                temporalidad=intervalo,
+                periodo=periodo_entrenamiento,
+                modelo_enum=tipo_modelo_enum,
+                target_method=metodo_target,
+                target_params=params_target
+            )
+
+            if modelo is None:
+                logging.error("❌ No se pudo crear o entrenar el modelo. Terminando ejecución.")
+                sys.exit(1)
+
+        #logging.info(f"✅ Modelo {tipo_modelo_enum.name} entrenado y listo para usar.")
 
         # --- Obtención de Datos para Backtest ---
         logging.info(f"Obteniendo datos para backtesting ({periodo_backtest})...")
