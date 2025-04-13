@@ -42,7 +42,7 @@ if __name__ == '__main__':
         intervalo: str = "15m"
         periodo_entrenamiento: str = "6 month ago UTC" # Separar periodo de entreno y backtest
         periodo_backtest: str = "1 month ago UTC"
-        ruta_modelos: str = rf"C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ModelosEntrenados"
+        ruta_modelos: str = rf"F:\_PERSONAL\_Bot Trading\Machine Learning"
         # Ejemplo de ruta para cargar un modelo específico (si se usara)
         # ruta_modelo_a_cargar: Optional[str] = os.path.join(ruta_modelos, "nombre_especifico.joblib")
         ruta_modelo_a_cargar: Optional[str] = None # Poner None para entrenar siempre uno nuevo
@@ -109,7 +109,7 @@ if __name__ == '__main__':
              # Exportar a Excel (usa el cálculo interno SIN comisiones para stats finales)
              fecha_hora: str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
              # Considerar usar config.REPORTS_DIR si se definió
-             ruta_reportes: str = rf'C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ResultadosBots'
+             ruta_reportes: str = rf'F:\_PERSONAL\_Bot Trading\ResultadosBots'
              os.makedirs(ruta_reportes, exist_ok=True) # Asegurar que la carpeta exista
              nombre_archivo: str = rf"Resultados_{tipo_modelo_enum.name}_{simbolo}_{intervalo}_{fecha_hora}.xlsx"
              archivo_final: str = os.path.join(ruta_reportes, nombre_archivo)

@@ -76,7 +76,7 @@ def guardar_modelo(model: Any, nombre_base_modelo: str, simbolo: str) -> None:
     # Usar la ruta definida en config.py si es apropiado y existe
     # ruta: str = MODEL_SAVE_DIR
     # O mantener la ruta definida aquí si es específica para esta función
-    ruta: str = os.path.expanduser(rf"C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ModelosEntrenados")
+    ruta: str = os.path.expanduser(rf"F:\_PERSONAL\_Bot Trading\Machine Learning")
     try:
         os.makedirs(ruta, exist_ok=True) # Crea la carpeta si no existe
 
