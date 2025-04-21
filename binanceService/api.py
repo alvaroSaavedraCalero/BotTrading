@@ -7,7 +7,7 @@ from typing import List, Tuple, Optional, Dict, Any # Importar tipos necesarios
 # Importar configuración y otras dependencias con tipos si es posible
 from config.config import BINANCE_API_KEY, BINANCE_API_SECRET, INITIAL_CAPITAL, RISK_PERCENT
 # Asumiendo que las funciones importadas también están tipadas o lo estarán
-from backtestingService.engine import calcular_cantidad
+from utils.trade_utils import calcular_cantidad
 from utils.telegram import enviar_mensaje_telegram
 
 # Verificar que las claves API existen antes de crear el cliente
@@ -204,9 +204,8 @@ def ejecutar_orden_binance(simbolo: str, tipo: str, precio_entrada: float, stop_
         if saldo_usdt < (INITIAL_CAPITAL * RISK_PERCENT): # Comprobar si hay suficiente para el riesgo mínimo
             logging.warning(f"⚠️ Saldo USDT ({saldo_usdt:.2f}) insuficiente para cubrir el riesgo inicial mínimo. No se abre operación.")
             return
-
-        # Calcular cantidad usando la función del engine (que ya retorna Optional[float])
-        cantidad: Optional[float] = calcular_cantidad(RISK_PERCENT, stop_loss, precio_entrada)
+        # Calcular cantidad usando la función de trade_utils
+        cantidad: Optional[float] = calcular_cantidad(RISK_PERCENT, stop_loss, precio_entrada, saldo_usdt)
 
         if cantidad is None or cantidad <= 0:
             logging.error(f"❌ Cantidad calculada inválida ({cantidad}). No se ejecutará la orden.")

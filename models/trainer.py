@@ -2,146 +2,174 @@
 
 import logging
 import numpy as np
-import pandas as pd # Importar pandas
-from typing import List, Dict, Any, Optional, Tuple # Importar tipos
+import pandas as pd
+from typing import List, Dict, Any, Optional, Tuple, Set
+import os
 
 # Importar clases y funciones específicas de sklearn
 from sklearn.model_selection import GridSearchCV, cross_val_score, TimeSeriesSplit
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, f1_score, accuracy_score
 from sklearn.utils.class_weight import compute_class_weight
-from sklearn.base import BaseEstimator # Para tipar el modelo genérico
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier # Para tipar en GridSearch (opcional)
-from xgboost import XGBClassifier # Para tipar en GridSearch (opcional)
+from sklearn.preprocessing import StandardScaler
+from sklearn.feature_selection import SelectFromModel
+from sklearn.base import BaseEstimator
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from xgboost import XGBClassifier
+import shap
+import matplotlib.pyplot as plt
+from datetime import datetime
 
-# Importar librerías TA
-from ta.momentum import RSIIndicator
-from ta.trend import MACD, EMAIndicator
-from ta.volatility import AverageTrueRange
-
+# Importar nuestros propios módulos
+from utils.indicators import prepare_features  # Nueva función que unifica la ingeniería de características
 # Importar Enum y config
-from utils.enumerados import TargetMethod # Asumiendo que TargetMethod es un Enum
-from config.config import TARGET_THRESHOLD, RANDOM_STATE
-
+from utils.enumerados import TargetMethod
+from config.config import TARGET_THRESHOLD, RANDOM_STATE, MODEL_SAVE_DIR
 # --- Definiciones de Funciones para el Target ---
 
-def definir_target(df: pd.DataFrame, umbral: float = TARGET_THRESHOLD) -> pd.DataFrame:
+def definir_target(df: pd.DataFrame, method: TargetMethod, **params) -> pd.DataFrame:
     """
-    Define el target original basado en el retorno de la siguiente vela y un umbral fijo.
-    Target: 2 (sube), 0 (baja), 1 (neutral).
-
+    Define target variable based on the specified method.
+    
     Args:
-        df: DataFrame de entrada.
-        umbral: Umbral para definir subida/bajada.
-
+        df: DataFrame with price data
+        method: Method to use for target definition
+        params: Additional parameters for the target method
+    
     Returns:
-        DataFrame con la columna 'target' añadida/modificada.
+        DataFrame with target column added
     """
-    logging.debug(f"Definiendo target original con umbral fijo: {umbral}")
-    df_copy = df.copy() # Trabajar con copia
-    if 'returns' not in df_copy.columns:
-        df_copy['returns'] = df_copy['close'].pct_change()
-
-    # Usar apply en la Serie directamente
-    next_returns: pd.Series = df_copy['returns'].shift(-1)
-    df_copy['target'] = next_returns.apply(
-        lambda x: 2 if x > umbral else (0 if x < -umbral else 1)
-    )
-    # Marcar NaNs introducidos por shift para eliminarlos después
-    df_copy['target'] = df_copy['target'].where(next_returns.notna())
-
-    return df_copy
-
-def definir_target_dinamico_atr(df: pd.DataFrame, atr_period: int = 14, atr_multiplier: float = 0.5) -> pd.DataFrame:
-    """
-    Define el target usando un umbral dinámico basado en ATR.
-    Target: 2 (sube), 0 (baja), 1 (neutral).
-
-    Args:
-        df: DataFrame de entrada.
-        atr_period: Periodo para calcular el ATR.
-        atr_multiplier: Multiplicador del ATR para definir el umbral.
-
-    Returns:
-        DataFrame con la columna 'target' añadida/modificada.
-    """
-    logging.debug(f"Definiendo target dinámico ATR con periodo={atr_period}, multiplicador={atr_multiplier}")
     df_copy = df.copy()
-    # Calcular ATR
-    df_copy['atr'] = AverageTrueRange(df_copy['high'], df_copy['low'], df_copy['close'], window=atr_period).average_true_range()
-    # Calcular el retorno del siguiente periodo
-    df_copy['next_return'] = df_copy['close'].pct_change().shift(-1)
-    # Definir umbral dinámico
-    df_copy['dynamic_threshold'] = df_copy['atr'] * atr_multiplier
-
-    # Definir target usando numpy.select
-    # Asegurarse que las columnas existen y no tienen NaNs inesperados antes de comparar
-    mask_valid: pd.Series = df_copy['next_return'].notna() & df_copy['dynamic_threshold'].notna()
-    conditions: List[pd.Series] = [
-        df_copy['next_return'] > df_copy['dynamic_threshold'],
-        df_copy['next_return'] < -df_copy['dynamic_threshold']
-    ]
-    choices: List[int] = [2, 0]
-    # Aplicar np.select solo donde los datos son válidos, marcar otros como NaN
-    df_copy['target'] = np.where(mask_valid, np.select(conditions, choices, default=1), np.nan)
-
-    return df_copy
-
-def definir_target_horizonte_n(df: pd.DataFrame, n_periods: int = 5, umbral: float = TARGET_THRESHOLD) -> pd.DataFrame:
+    
+    if method == TargetMethod.ORIGINAL:
+        umbral = params.get('umbral', TARGET_THRESHOLD)
+        next_returns = df_copy['close'].pct_change().shift(-1)
+        df_copy['target'] = next_returns.apply(
+            lambda x: 2 if x > umbral else (0 if x < -umbral else 1)
+        )
+        df_copy['target'] = df_copy['target'].where(next_returns.notna())
+        
+    elif method == TargetMethod.ATR:
+        atr_period = params.get('atr_period', 14)
+        atr_multiplier = params.get('atr_multiplier', 0.5)
+        # Use ATR from our new indicators module
+        df_copy = prepare_features(df_copy, include_all=False, 
+                                 custom_config={'volatility': {'atr_window': atr_period}})
+        threshold = df_copy['atr'] * atr_multiplier
+        next_return = df_copy['close'].pct_change().shift(-1)
+        df_copy['target'] = np.where(
+            next_return > threshold, 2,
+            np.where(next_return < -threshold, 0, 1)
+        )
+        
+    elif method == TargetMethod.HORIZONTE_N:
+        n_periods = params.get('n_periods', 5)
+        umbral = params.get('umbral', TARGET_THRESHOLD)
+        future_return = df_copy['close'].pct_change(periods=n_periods).shift(-n_periods)
+        df_copy['target'] = future_return.apply(
+            lambda x: 2 if x > umbral else (0 if x < -umbral else 1)
+        )
+        df_copy['target'] = df_copy['target'].where(future_return.notna())
+        
+    elif method == TargetMethod.NIVEL_ALCANZADO:
+        n_periods = params.get('n_periods', 5)
+        umbral_ratio = params.get('umbral_ratio', TARGET_THRESHOLD * 1.5)
+        # Calcular niveles objetivo
+        df_copy['target_up_level'] = df_copy['close'] * (1 + umbral_ratio)
+        df_copy['target_down_level'] = df_copy['close'] * (1 - umbral_ratio)
+        # Encontrar max/min futuro
+        df_copy['future_max_high'] = df_copy['high'].shift(-n_periods).rolling(window=n_periods, min_periods=1).max()
+        df_copy['future_min_low'] = df_copy['low'].shift(-n_periods).rolling(window=n_periods, min_periods=1).min()
+        # Determinar si los niveles fueron alcanzados
+        df_copy['hit_up'] = df_copy['future_max_high'] >= df_copy['target_up_level']
+        df_copy['hit_down'] = df_copy['future_min_low'] <= df_copy['target_down_level']
+        # Asignar target
+        mask_valid = df_copy['future_max_high'].notna() & df_copy['future_min_low'].notna()
+        conditions = [df_copy['hit_up'], df_copy['hit_down']]
+        choices = [2, 0]
+        df_copy['target'] = np.where(mask_valid, np.select(conditions, choices, default=1), np.nan)
+        
+    return ddef analyze_feature_importance(
+    model: Any,
+    X: pd.DataFrame,
+    feature_names: List[str],
+    save_dir: str = MODEL_SAVE_DIR
+) -> Tuple[pd.DataFrame, None]:
     """
-    Define el target basado en el retorno acumulado sobre los próximos n_periods.
-    Target: 2 (sube), 0 (baja), 1 (neutral).
+    Analiza la importancia de las características usando tanto la importancia del modelo
+    como valores SHAP.
 
     Args:
-        df: DataFrame de entrada.
-        n_periods: Número de periodos hacia adelante.
-        umbral: Umbral de retorno.
+        model: Modelo entrenado
+        X: DataFrame con las características
+        feature_names: Lista de nombres de características
+        save_dir: Directorio donde guardar los gráficos
 
     Returns:
-        DataFrame con la columna 'target' añadida/modificada.
+        DataFrame con las importancias de características
     """
-    logging.debug(f"Definiendo target horizonte N={n_periods} con umbral={umbral}")
-    df_copy = df.copy()
-    # Calcular retorno futuro
-    df_copy['future_return_n'] = df_copy['close'].pct_change(periods=n_periods).shift(-n_periods)
-    # Definir target
-    future_returns_series: pd.Series = df_copy['future_return_n']
-    df_copy['target'] = future_returns_series.apply(
-        lambda x: 2 if x > umbral else (0 if x < -umbral else 1)
-    )
-    # Marcar NaNs
-    df_copy['target'] = df_copy['target'].where(future_returns_series.notna())
-    return df_copy
+    logging.info("Analizando importancia de características...")
+    
+    try:
+        # Obtener importancia basada en el modelo
+        if hasattr(model, 'feature_importances_'):
+            importance = model.feature_importances_
+        elif hasattr(model, 'coef_'):
+            importance = np.abs(model.coef_).mean(axis=0) if model.coef_.ndim > 1 else np.abs(model.coef_)
+        else:
+            logging.warning("El modelo no proporciona importancia de características directamente")
+            importance = np.zeros(len(feature_names))
 
-def definir_target_nivel_alcanzado(df: pd.DataFrame, n_periods: int = 5, umbral_ratio: float = TARGET_THRESHOLD * 1.5) -> pd.DataFrame:
-    """
-    Define el target basado en si el high/low futuro cruza un umbral relativo al cierre actual.
-    Target: 2 (nivel up), 0 (nivel down), 1 (ninguno).
+        # Calcular valores SHAP
+        try:
+            explainer = shap.TreeExplainer(model)
+            shap_values = explainer.shap_values(X)
+            if isinstance(shap_values, list):
+                shap_importance = np.abs(np.array(shap_values)).mean(axis=0).mean(axis=0)
+            else:
+                shap_importance = np.abs(shap_values).mean(axis=0)
+        except Exception as e:
+            logging.warning(f"No se pudieron calcular valores SHAP: {e}")
+            shap_importance = np.zeros(len(feature_names))
 
-    Args:
-        df: DataFrame de entrada.
-        n_periods: Ventana futura a considerar.
-        umbral_ratio: Ratio sobre cierre actual para niveles.
+        # Crear DataFrame de importancia
+        importance_df = pd.DataFrame({
+            'feature': feature_names,
+            'model_importance': importance,
+            'shap_importance': shap_importance
+        })
 
-    Returns:
-        DataFrame con la columna 'target' añadida/modificada.
-    """
-    logging.debug(f"Definiendo target nivel alcanzado N={n_periods} con ratio={umbral_ratio}")
-    df_copy = df.copy()
-    # Calcular niveles objetivo
-    df_copy['target_up_level'] = df_copy['close'] * (1 + umbral_ratio)
-    df_copy['target_down_level'] = df_copy['close'] * (1 - umbral_ratio)
-    # Encontrar max/min futuro
-    df_copy['future_max_high'] = df_copy['high'].shift(-n_periods).rolling(window=n_periods, min_periods=1).max()
-    df_copy['future_min_low'] = df_copy['low'].shift(-n_periods).rolling(window=n_periods, min_periods=1).min()
-    # Determinar si los niveles fueron alcanzados
-    df_copy['hit_up'] = df_copy['future_max_high'] >= df_copy['target_up_level']
-    df_copy['hit_down'] = df_copy['future_min_low'] <= df_copy['target_down_level']
-    # Asignar target
-    mask_valid: pd.Series = df_copy['future_max_high'].notna() & df_copy['future_min_low'].notna()
-    conditions: List[pd.Series] = [df_copy['hit_up'], df_copy['hit_down']]
-    choices: List[int] = [2, 0]
-    df_copy['target'] = np.where(mask_valid, np.select(conditions, choices, default=1), np.nan)
-    return df_copy
+        # Calcular importancia combinada
+        importance_df['combined_importance'] = (
+            (importance_df['model_importance'] / importance_df['model_importance'].max() if importance_df['model_importance'].max() > 0 else 0) +
+            (importance_df['shap_importance'] / importance_df['shap_importance'].max() if importance_df['shap_importance'].max() > 0 else 0)
+        ) / 2
+
+        importance_df = importance_df.sort_values('combined_importance', ascending=False)
+
+        # Crear visualizaciones
+        plt.figure(figsize=(12, 6))
+        plt.subplot(1, 2, 1)
+        importance_df.head(15).plot(x='feature', y='model_importance', kind='bar')
+        plt.title('Importancia de Características (Modelo)')
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+
+        plt.subplot(1, 2, 2)
+        importance_df.head(15).plot(x='feature', y='shap_importance', kind='bar')
+        plt.title('Importancia de Características (SHAP)')
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+
+        # Guardar gráfico
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        plt.savefig(f"{save_dir}/feature_importance_{timestamp}.png", bbox_inches='tight')
+        plt.close()
+
+        return importance_df, None
+
+    except Exception as e:
+        logging.error(f"Error en el análisis de importancia de características: {e}")
+        return pd.DataFrame(), None
 
 
 # --- Función Principal de Entrenamiento ---
@@ -173,35 +201,41 @@ def entrenar_modelo(
 
     # --- 1. Definición del Target ---
     logging.info(f"Aplicando método target '{target_method.name}' con parámetros: {target_params}")
-    if target_method == TargetMethod.ORIGINAL:
-        df = definir_target(df, **target_params)
-    elif target_method == TargetMethod.ATR:
-        df = definir_target_dinamico_atr(df, **target_params)
-    elif target_method == TargetMethod.HORIZONTE_N:
-        df = definir_target_horizonte_n(df, **target_params)
-    elif target_method == TargetMethod.NIVEL_ALCANZADO:
-        df = definir_target_nivel_alcanzado(df, **target_params)
-    else:
-        logging.error(f"Método de target '{target_method}' no reconocido.")
-        raise ValueError(f"Método de target '{target_method}' no reconocido.")
-
-    # --- 2. Ingeniería de Características Adicionales ---
-    logging.info("Calculando características adicionales (RSI, MACD, EMAs, Returns)...")
-    if 'returns' not in df.columns:
-        df['returns'] = df['close'].pct_change()
-    if 'atr' not in df.columns:
-        df['atr'] = AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
-
-    # No añadir tipos :pd.Series aquí
-    df['rsi'] = RSIIndicator(df['close'], window=14).rsi()
-    df['macd'] = MACD(df['close']).macd_diff()
-    df['ema9'] = EMAIndicator(df['close'], window=9).ema_indicator()
-    df['ema21'] = EMAIndicator(df['close'], window=21).ema_indicator()
-
+    df = definir_target(df, target_method, **target_params)
+    if df is None or 'target' not in df.columns:
+        logging.error(f"El método target '{target_method}' no generó una columna 'target' válida.")
+        return None
+    # --- 2. Ingeniería de Características Avanzada ---
+    logging.info("Calculando características avanzadas...")
+    try:
+        # Usar nuestro nuevo módulo de indicadores
+        df = prepare_features(df, include_all=True)
+        
+        # Asegurarse de que tenemos las características básicas
+        if 'returns' not in df.columns:
+            df['returns'] = df['close'].pct_change()
+            
+        # Lista actualizada de características
+        features_cols = [
+            'open', 'high', 'low', 'close', 'temporalidad', 'returns',
+            'rsi', 'macd', 'macd_signal', 'macd_diff',
+            'bb_high', 'bb_mid', 'bb_low', 'bb_width',
+            'stoch_k', 'stoch_d',
+            'adx', 'di_plus', 'di_minus',
+            'atr', 'natr',
+            'obv', 'volume_sma', 'volume_ratio',
+            'price_std', 'volatility_ratio'
+        ]
+        
+        # Filtrar solo las columnas que existen
+        features_cols = [col for col in features_cols if col in df.columns]
+        
+    except Exception as e:
+        logging.error(f"Error en el cálculo de características: {e}")
+        return None
     # --- 3. Limpieza Final de Datos ---
     initial_rows: int = len(df)
     df = df.dropna(subset=['target']) # Asegura que el target calculado sea válido
-    features_cols: List[str] = ['open', 'high', 'low', 'close', 'temporalidad', 'returns', 'rsi', 'macd', 'ema9', 'ema21', 'atr']
     # Asegurarse que todas las features existan antes de dropna
     missing_cols = [col for col in features_cols if col not in df.columns]
     if missing_cols:
@@ -301,6 +335,17 @@ def entrenar_modelo(
         # best_estimator_ devuelve el tipo base del estimador, usar Any o ModelInputType
         best_model: Any = grid_search.best_estimator_
 
+        # Analizar importancia de características
+        if hasattr(grid_search.best_estimator_, 'feature_importances_') or hasattr(grid_search.best_estimator_, 'coef_'):
+            importance_df, _ = analyze_feature_importance(
+                grid_search.best_estimator_,
+                X_train,
+                features_cols
+            )
+            logging.info("\nImportancia de características top 10:")
+            logging.info(importance_df.head(10).to_string())
+        else:
+            logging.warning("El modelo no proporciona información de importancia de características")
     except Exception as e:
         logging.exception(f"Error durante GridSearchCV: {e}")
         return None
