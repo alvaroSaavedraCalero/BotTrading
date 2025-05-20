@@ -12,21 +12,23 @@ from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import PatternFill, Font, Alignment
 
-TradeTuple = Tuple[str, float, float, Timestamp, Timestamp]
+# TradeTuple ahora incluye PnL Neto
+# TradeTuple = Tuple[str, float, float, Timestamp, Timestamp, float] # Definición local eliminada
+from backtestingService.engine import TradeTuple # TradeTuple importado
 
 # Funcion para generar un DataFrame con los resultados de los trades realizados
 def generar_dataframe_resultados(historial_trades: List[TradeTuple]) -> pd.DataFrame:
     """
     Convierte el historial de trades (lista de tuplas) en un DataFrame de pandas.
-    RECALCULA la evolución del balance (sin comisiones) para mostrar en la columna.
+    Usa el P&L neto del trade y calcula el balance acumulado real.
     """
     trades_list: List[Dict[str, Any]] = []
-    # Restaurar cálculo de balance_actual
-    balance_actual: float = float(INITIAL_CAPITAL)
+    current_balance: float = float(INITIAL_CAPITAL) # Nuevo balance acumulado real
 
     for idx, trade_info in enumerate(historial_trades, start=1):
-        resultado: str; entrada: float; salida: float; fecha_entrada: Timestamp; fecha_salida: Timestamp
-        resultado, entrada, salida, fecha_entrada, fecha_salida = trade_info
+        resultado: str; entrada: float; salida: float; fecha_entrada: Timestamp; fecha_salida: Timestamp; trade_pnl_net: float
+        # Desempaquetar el nuevo TradeTuple
+        resultado, entrada, salida, fecha_entrada, fecha_salida, trade_pnl_net = trade_info
 
         try:
             tipo: str; res: str
@@ -34,15 +36,11 @@ def generar_dataframe_resultados(historial_trades: List[TradeTuple]) -> pd.DataF
         except ValueError:
              logging.warning(f"Formato de resultado inesperado en trade {idx}: '{resultado}'.")
              tipo = resultado
-             res = "DESCONOCIDO"
+             res = "DESCONOCIDO" # O el tipo original si no hay '_'
 
-        # Restaurar actualización de balance_actual (sin comisiones)
-        if res == 'GANANCIA':
-            balance_actual += balance_actual * RISK_PERCENT * RR_RATIO
-        elif res == 'PERDIDA':
-            balance_actual -= balance_actual * RISK_PERCENT
+        current_balance += trade_pnl_net # Actualizar balance con PnL neto del trade
 
-        # Reconstruir SL/TP para el reporte
+        # Reconstruir SL/TP para el reporte (lógica existente se mantiene)
         sl_reporte: float; tp_reporte: float
         if tipo == "LONG":
             sl_reporte = entrada * (1 - RISK_PERCENT)
@@ -66,15 +64,16 @@ def generar_dataframe_resultados(historial_trades: List[TradeTuple]) -> pd.DataF
             "Stop Loss": round(stop_loss_final, 5),
             "Take Profit": round(take_profit_final, 5),
             "Resultado": res,
-            "Balance Tras Operación": round(balance_actual, 2) # <-- Restaurada Columna
+            "Profit/Loss Trade": round(trade_pnl_net, 2), # Nueva columna PnL
+            "Balance Tras Operación": round(current_balance, 2) # Balance real acumulado
         }
         trades_list.append(operacion)
 
-    # Definir columnas CON "Balance Tras Operación"
+    # Definir columnas CON "Profit/Loss Trade" y "Balance Tras Operación" actualizado
     columnas_df: List[str] = [
         "Operación", "Tipo", "Fecha Entrada", "Fecha Salida",
         "Precio Entrada", "Stop Loss", "Take Profit", "Resultado",
-        "Balance Tras Operación" # <-- Restaurada Columna
+        "Profit/Loss Trade", "Balance Tras Operación" # Nuevas y actualizadas columnas
     ]
     if not trades_list:
          return pd.DataFrame(columns=columnas_df)
@@ -92,11 +91,11 @@ def exportar_resultados_excel(
 ) -> None:
     """
     Exporta el DataFrame de trades a Excel con formato.
-    Usa el ÚLTIMO valor de 'Balance Tras Operación' del DataFrame para las estadísticas finales.
+    Usa el balance_final_real (del backtest) para las estadísticas finales.
 
     Args:
         trades_df: DataFrame generado por generar_dataframe_resultados.
-        balance_final_real: El balance final del backtest (incluyendo comisiones). NO se usa para las stats.
+        balance_final_real: El balance final del backtest (incluyendo comisiones).
         archivo_excel: Nombre del archivo Excel de salida.
     """
     if trades_df.empty:
@@ -113,14 +112,14 @@ def exportar_resultados_excel(
         # --- Formato Básico y Título ---
         ws['A1'] = 'Resultados del Backtesting'
         ws['A1'].font = Font(size=16, bold=True)
-        # Volver a 9 columnas (A-I)
-        ws.merge_cells('A1:I1') # <-- Ajustado a I1
+        # Ajustado a 10 columnas (A-J)
+        ws.merge_cells('A1:J1') # <-- Ajustado a J1
         ws['A1'].alignment = Alignment(horizontal='center')
 
         # --- Formato a Cabeceras (Fila 2) ---
         header_fill: PatternFill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
         header_font: Font = Font(bold=True, color="FFFFFF")
-        num_columnas: int = ws.max_column # 9 columnas
+        num_columnas: int = ws.max_column # Ahora 10 columnas
         for col_idx in range(1, num_columnas + 1):
             cell = ws.cell(row=2, column=col_idx)
             if cell:
@@ -131,16 +130,16 @@ def exportar_resultados_excel(
         # --- Formato Condicional a Filas de Datos (desde Fila 3) ---
         if ws.max_row >= 3:
              for row_idx in range(3, ws.max_row + 1):
-                # Restaurar índice de columna para balance
+                # Ajustar índices de columna para formato
                 tipo_cell = ws.cell(row=row_idx, column=2)
-                resultado_cell = ws.cell(row=row_idx, column=8)
+                resultado_cell = ws.cell(row=row_idx, column=8) # Col H
+                profit_loss_cell = ws.cell(row=row_idx, column=9) # Nueva Col I (P/L)
+                balance_cell = ws.cell(row=row_idx, column=10)    # Nueva Col J (Balance)
                 precio_entrada_cell = ws.cell(row=row_idx, column=5)
                 stop_loss_cell = ws.cell(row=row_idx, column=6)
                 take_profit_cell = ws.cell(row=row_idx, column=7)
-                balance_cell = ws.cell(row=row_idx, column=9) # <-- Columna I
 
-                # ... (lógica de formato idéntica para tipo, precios, resultado) ...
-                # Formato Tipo
+                # Formato Tipo (sin cambios en lógica, solo celda)
                 tipo_value: Any = tipo_cell.value
                 if tipo_value:
                     tipo_str: str = str(tipo_value).upper()
@@ -173,14 +172,25 @@ def exportar_resultados_excel(
                     resultado_cell.font = Font(color="9C0006", bold=True)
                 if resultado_cell: resultado_cell.alignment = Alignment(horizontal='center')
 
+                # Formato para Profit/Loss Trade (Columna I)
+                if profit_loss_cell:
+                    profit_loss_cell.number_format = '#,##0.00 €'
+                    profit_loss_cell.alignment = Alignment(horizontal='right')
+                    # Colorear P/L
+                    pnl_value: Any = profit_loss_cell.value
+                    if isinstance(pnl_value, (int, float)):
+                        if pnl_value > 0:
+                            profit_loss_cell.font = Font(color="006100", bold=True) # Verde para positivo
+                        elif pnl_value < 0:
+                            profit_loss_cell.font = Font(color="9C0006", bold=True) # Rojo para negativo
 
-                # Restaurar formato para balance_cell (Columna I)
+                # Formato para balance_cell (Columna J)
                 if balance_cell:
                     balance_cell.number_format = '#,##0.00 €'
                     balance_cell.alignment = Alignment(horizontal='right')
 
         # --- Ajuste automático del ancho de columnas ---
-        # (La lógica existente debería funcionar para 9 columnas)
+        # (La lógica existente debería funcionar para 10 columnas)
         for col_cells in ws.columns:
             max_length: int = 0
             col_index: Optional[int] = col_cells[0].column
@@ -206,13 +216,10 @@ def exportar_resultados_excel(
         sl_count: int = int((trades_df['Resultado'] == 'PERDIDA').sum())
         total_trades: int = len(trades_df)
 
-        # <<< CAMBIO CLAVE: Obtener el último balance de la columna del DF >>>
-        balance_final_reporte: float = float(trades_df['Balance Tras Operación'].iloc[-1]) if total_trades > 0 else float(INITIAL_CAPITAL)
-
-        rentabilidad: float = 0.0
-        if INITIAL_CAPITAL != 0 and total_trades > 0:
-             # Calcular rentabilidad basada en el balance final del reporte (sin comisiones)
-             rentabilidad = ((balance_final_reporte - INITIAL_CAPITAL) / INITIAL_CAPITAL) * 100
+        # Usar balance_final_real (del backtest con comisiones) para estadísticas
+        rentabilidad_real: float = 0.0
+        if INITIAL_CAPITAL != 0 and total_trades > 0: # Evitar división por cero
+             rentabilidad_real = ((balance_final_real - INITIAL_CAPITAL) / INITIAL_CAPITAL) * 100
 
         estadisticas: List[List[Any]] = [
             ["📈 Estadísticas del rendimiento", ""],
@@ -220,12 +227,10 @@ def exportar_resultados_excel(
             ["Take Profit alcanzado:", f"{tp_count} trades ({(tp_count / total_trades * 100):.2f}%)" if total_trades > 0 else "0 trades (N/A)"],
             ["Stop Loss alcanzado:", f"{sl_count} trades ({(sl_count / total_trades * 100):.2f}%)" if total_trades > 0 else "0 trades (N/A)"],
             ["Balance Inicial:", f"{INITIAL_CAPITAL:.2f} €"],
-            # <<< Usar balance_final_reporte para mostrar >>>
-            ["Balance Final:", f"{balance_final_reporte:.2f} €"],
-             # <<< Rentabilidad basada en balance_final_reporte >>>
-            ["Rentabilidad total:", f"{rentabilidad:.2f}%"]
+            ["Balance Final:", f"{balance_final_real:.2f} €"], # Usar balance_final_real
+            ["Rentabilidad total:", f"{rentabilidad_real:.2f}%"] # Usar rentabilidad_real
         ]
-        # (Bucle para escribir estadísticas idéntico al anterior)...
+        # (Bucle para escribir estadísticas idéntico al anterior)
         for idx, stats_row in enumerate(estadisticas, start=ultima_fila):
             etiqueta: str = str(stats_row[0])
             valor: Any = stats_row[1]
@@ -252,14 +257,14 @@ def mostrar_resultados(
 ) -> None:
     """
     Muestra un resumen de los resultados del backtesting en los logs.
-    Usa el ÚLTIMO valor de 'Balance Tras Operación' del DataFrame para las estadísticas finales.
+    Usa el balance_final_real (del backtest) para las estadísticas finales.
 
     Args:
-        balance_final_real: El balance final del backtest (incluyendo comisiones). NO se usa para las stats.
+        balance_final_real: El balance final del backtest (incluyendo comisiones).
         historial_trades: Lista de tuplas representando cada trade.
     """
     logging.info("\n--- Resultados del Backtesting ---")
-    # Generar DF CON la columna de balance recalculado
+    # Generar DF CON PnL y balance real
     trades_df: pd.DataFrame = generar_dataframe_resultados(historial_trades)
 
     if trades_df.empty:
@@ -267,7 +272,8 @@ def mostrar_resultados(
     else:
         logging.info("Detalle de Operaciones:")
         try:
-             with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 1000): # Más ancho para 9 cols
+             # Ajustar ancho para 10 columnas
+             with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 1200):
                 logging.info(f"\n{trades_df.to_string(index=False)}\n")
         except Exception as e_print:
              logging.error(f"Error al formatear DataFrame para log: {e_print}")
@@ -277,28 +283,24 @@ def mostrar_resultados(
     total_trades: int = len(historial_trades)
     tp_count: int = 0
     sl_count: int = 0
-    # <<< CAMBIO CLAVE: Obtener el último balance de la columna del DF >>>
-    balance_final_reporte: float = float(INITIAL_CAPITAL) # Default si no hay trades
     if not trades_df.empty:
          tp_count = int((trades_df['Resultado'] == 'GANANCIA').sum())
          sl_count = int((trades_df['Resultado'] == 'PERDIDA').sum())
-         balance_final_reporte = float(trades_df['Balance Tras Operación'].iloc[-1])
-
 
     porcentaje_tp: float = (tp_count / total_trades * 100) if total_trades > 0 else 0.0
     porcentaje_sl: float = (sl_count / total_trades * 100) if total_trades > 0 else 0.0
-    rentabilidad: float = 0.0
-    if INITIAL_CAPITAL != 0:
-        # Calcular rentabilidad basada en el balance final del reporte (sin comisiones)
-        rentabilidad = ((balance_final_reporte - INITIAL_CAPITAL) / INITIAL_CAPITAL) * 100
+
+    # Usar balance_final_real para calcular rentabilidad
+    rentabilidad_real: float = 0.0
+    if INITIAL_CAPITAL != 0: # Evitar división por cero
+        rentabilidad_real = ((balance_final_real - INITIAL_CAPITAL) / INITIAL_CAPITAL) * 100
 
     logging.info("\n📈 Estadísticas del rendimiento:")
     logging.info(f"- Trades realizados: {total_trades}")
     logging.info(f"- Take Profit alcanzado: {tp_count} trades ({porcentaje_tp:.2f}%)")
     logging.info(f"- Stop Loss alcanzado: {sl_count} trades ({porcentaje_sl:.2f}%)")
     logging.info(f"- Balance inicial: {INITIAL_CAPITAL:.2f} €")
-    # <<< Usar balance_final_reporte para mostrar >>>
-    logging.info(f"- Balance final: {balance_final_reporte:.2f} €")
-    # <<< Rentabilidad basada en balance_final_reporte >>>
-    logging.info(f"- Rentabilidad total: {rentabilidad:.2f}%")
+    logging.info(f"- Balance final: {balance_final_real:.2f} €") # Usar balance_final_real
+    logging.info(f"- Rentabilidad total: {rentabilidad_real:.2f}%") # Usar rentabilidad_real
     logging.info("------------------------------------")
+    logging.warning("DISCLAIMER: Backtest P&L is based on a direct percentage-of-balance risk model. Live trading P&L will depend on explicit position sizing (via calcular_cantidad), actual market fill prices, and slippage, and may differ significantly from backtest results.")

@@ -2,7 +2,7 @@
 
 import logging
 import pandas as pd
-from typing import List, Tuple, Any, Optional
+from typing import List, Tuple, Any, Optional, Dict # Added Dict
 
 # Importar librerías TA al nivel superior
 from ta.momentum import RSIIndicator
@@ -14,8 +14,8 @@ from config.config import INITIAL_CAPITAL, RISK_PERCENT, RR_RATIO, COMMISSION_PE
 import binanceService.api as binance_api
 
 # Definir un tipo más específico para la estructura de un trade para claridad
-# (Tipo, Precio Entrada, Nivel Salida, Fecha Entrada, Fecha Salida)
-TradeTuple = Tuple[str, float, float, Timestamp, Timestamp]
+# (Tipo, Precio Entrada, Nivel Salida, Fecha Entrada, Fecha Salida, PnL Neto)
+TradeTuple = Tuple[str, float, float, Timestamp, Timestamp, float]
 
 
 # Backtesting y simulación de resultados financieros
@@ -66,11 +66,14 @@ def realizar_backtest(df: pd.DataFrame, model: Any) -> Tuple[float, List[TradeTu
     # Usar float para balance_hist ya que balance es float
     balance_hist: List[float] = [balance]
     trades: List[TradeTuple] = []
+    open_trade_details: Optional[Dict[str, Any]] = None # For tracking open trades
     # Definir las columnas de features explícitamente
-    feature_cols: List[str] = ['open', 'high', 'low', 'close', 'temporalidad', 'returns', 'rsi', 'macd', 'ema9', 'ema21', 'atr']
+    feature_cols: List[str] = ['open', 'high', 'low', 'close', 'returns', 'rsi', 'macd', 'ema9', 'ema21', 'atr']
 
     # --- Bucle Principal del Backtest ---
     for i in range(len(df_processed) - 1):
+        # Reset trade_executed flag for the current iteration
+        trade_executed: bool = False # Moved here to reset for each potential new trade
         riesgo_actual: float = balance * RISK_PERCENT
         # Asegurarse que las features existan y manejar posibles NaNs residuales si iloc falla
         try:
@@ -88,36 +91,45 @@ def realizar_backtest(df: pd.DataFrame, model: Any) -> Tuple[float, List[TradeTu
 
         fecha_entrada: Timestamp = df_processed.index[i]
 
-        # Pasar solo el dataframe hasta la fila actual para la confirmación
-        sub_df: pd.DataFrame = df_processed.iloc[:i+1]
-        confirmar_long: bool
-        confirmar_short: bool
-        # Añadir manejo de errores por si confirmar_senal falla
-        try:
-             confirmar_long, confirmar_short = confirmar_senal_con_indicadores(sub_df)
-        except Exception as e:
-             logging.error(f"Error al confirmar señal en índice {i}: {e}. Saltando iteración.")
-             balance_hist.append(balance)
-             continue
+        # Extraer valores de indicadores para la fila actual
+        current_rsi = df_processed['rsi'].iloc[i]
+        current_macd_diff = df_processed['macd'].iloc[i]
+        current_ema_fast = df_processed['ema9'].iloc[i]
+        current_ema_slow = df_processed['ema21'].iloc[i]
+
+        confirmar_long: bool = False
+        confirmar_short: bool = False
+
+        if pd.isna(current_rsi) or pd.isna(current_macd_diff) or pd.isna(current_ema_fast) or pd.isna(current_ema_slow):
+            logging.warning(f"NaNs en indicadores en índice {i} ({df_processed.index[i]}). No se puede confirmar señal.")
+            confirmar_long, confirmar_short = False, False
+        else:
+            try:
+                confirmar_long, confirmar_short = confirmar_senal_con_indicadores(
+                    current_rsi, current_macd_diff, current_ema_fast, current_ema_slow
+                )
+            except Exception as e:
+                 logging.error(f"Error al confirmar señal en índice {i} ({df_processed.index[i]}): {e}. Saltando iteración.")
+                 balance_hist.append(balance) # Mantener historial de balance
+                 continue
 
 
         # --- Lógica de Entrada y Salida de Trades ---
         precio_entrada: float = 0.0 # Inicializar
         stop_loss: float = 0.0
         take_profit: float = 0.0
-        trade_executed: bool = False # Flag para evitar añadir balance si no hubo trade
+        # trade_executed: bool = False # Flag para evitar añadir balance si no hubo trade (moved to top of loop)
 
         # Lógica para LONG
-        if prediccion == 2 and confirmar_long:
+        if prediccion == 2 and confirmar_long and open_trade_details is None: # Only open if no trade is open
             precio_entrada = df_processed['close'].iloc[i] * (1 + SIMULATED_SPREAD)
-            # Calcular SL/TP basados en el riesgo porcentual sobre el precio de entrada
-            # El cálculo original de SL usaba RISK_PERCENT directamente, lo cual es inusual.
-            # Un SL común se basa en ATR o un % fijo *diferente* al riesgo por trade.
-            # Asumiendo que RISK_PERCENT define cuánto bajar/subir para SL/TP desde entrada:
-            sl_distance: float = precio_entrada * RISK_PERCENT # Distancia absoluta del SL
-            tp_distance: float = sl_distance * RR_RATIO      # Distancia absoluta del TP
+            sl_distance: float = precio_entrada * RISK_PERCENT
+            tp_distance: float = sl_distance * RR_RATIO
             stop_loss = precio_entrada - sl_distance
             take_profit = precio_entrada + tp_distance
+            open_trade_details = {'type': 'LONG', 'entry_price': precio_entrada, 'entry_date': fecha_entrada, 'sl': stop_loss, 'tp': take_profit}
+            logging.info(f"Opening LONG trade: {open_trade_details}")
+
 
             for j in range(i + 1, len(df_processed)):
                 fecha_salida: Timestamp = df_processed.index[j]
@@ -127,27 +139,34 @@ def realizar_backtest(df: pd.DataFrame, model: Any) -> Tuple[float, List[TradeTu
                 if low_price <= stop_loss: # Salida por Stop Loss
                     # Calcular pérdida basada en el riesgo definido, no en el tamaño del movimiento SL necesariamente
                     balance -= riesgo_actual # Restar el riesgo definido
-                    balance -= (riesgo_actual / (precio_entrada - stop_loss)) * precio_entrada * COMMISSION_PER_TRADE * 2 # Comisión estimada sobre nocional
-                    trades.append(('LONG_PERDIDA', precio_entrada, stop_loss, fecha_entrada, fecha_salida))
+                    balance -= (riesgo_actual * COMMISSION_PER_TRADE * 2) # Nueva comisión
+                    trade_pnl_net = -riesgo_actual - (riesgo_actual * COMMISSION_PER_TRADE * 2)
+                    trades.append(('LONG_PERDIDA', precio_entrada, stop_loss, fecha_entrada, fecha_salida, trade_pnl_net))
                     trade_executed = True
+                    open_trade_details = None # Trade closed
                     break
                 elif high_price >= take_profit: # Salida por Take Profit
                     # Calcular ganancia basada en el riesgo y RR ratio
                     profit: float = riesgo_actual * RR_RATIO
                     balance += profit
-                    balance -= (profit / (take_profit - precio_entrada)) * precio_entrada * COMMISSION_PER_TRADE * 2 # Comisión estimada sobre nocional
-                    trades.append(('LONG_GANANCIA', precio_entrada, take_profit, fecha_entrada, fecha_salida))
+                    balance -= (riesgo_actual * COMMISSION_PER_TRADE * 2) # Nueva comisión
+                    trade_pnl_net = profit - (riesgo_actual * COMMISSION_PER_TRADE * 2)
+                    trades.append(('LONG_GANANCIA', precio_entrada, take_profit, fecha_entrada, fecha_salida, trade_pnl_net))
                     trade_executed = True
+                    open_trade_details = None # Trade closed
                     break
             # Si el bucle termina sin break (fin de datos), no se cierra la operación (podría añadirse lógica)
 
         # Lógica para SHORT
-        elif prediccion == 0 and confirmar_short:
+        elif prediccion == 0 and confirmar_short and open_trade_details is None: # Only open if no trade is open
             precio_entrada = df_processed['close'].iloc[i] * (1 - SIMULATED_SPREAD)
-            sl_distance = precio_entrada * RISK_PERCENT # Distancia absoluta del SL (hacia arriba)
-            tp_distance = sl_distance * RR_RATIO      # Distancia absoluta del TP (hacia abajo)
+            sl_distance = precio_entrada * RISK_PERCENT
+            tp_distance = sl_distance * RR_RATIO
             stop_loss = precio_entrada + sl_distance
             take_profit = precio_entrada - tp_distance
+            open_trade_details = {'type': 'SHORT', 'entry_price': precio_entrada, 'entry_date': fecha_entrada, 'sl': stop_loss, 'tp': take_profit}
+            logging.info(f"Opening SHORT trade: {open_trade_details}")
+
 
             for j in range(i + 1, len(df_processed)):
                 fecha_salida = df_processed.index[j]
@@ -156,16 +175,20 @@ def realizar_backtest(df: pd.DataFrame, model: Any) -> Tuple[float, List[TradeTu
 
                 if high_price >= stop_loss: # Salida por Stop Loss
                     balance -= riesgo_actual
-                    balance -= (riesgo_actual / (stop_loss - precio_entrada)) * precio_entrada * COMMISSION_PER_TRADE * 2 # Comisión estimada
-                    trades.append(('SHORT_PERDIDA', precio_entrada, stop_loss, fecha_entrada, fecha_salida))
+                    balance -= (riesgo_actual * COMMISSION_PER_TRADE * 2) # Nueva comisión
+                    trade_pnl_net = -riesgo_actual - (riesgo_actual * COMMISSION_PER_TRADE * 2)
+                    trades.append(('SHORT_PERDIDA', precio_entrada, stop_loss, fecha_entrada, fecha_salida, trade_pnl_net))
                     trade_executed = True
+                    open_trade_details = None # Trade closed
                     break
                 elif low_price <= take_profit: # Salida por Take Profit
                     profit = riesgo_actual * RR_RATIO
                     balance += profit
-                    balance -= (profit / (precio_entrada - take_profit)) * precio_entrada * COMMISSION_PER_TRADE * 2 # Comisión estimada
-                    trades.append(('SHORT_GANANCIA', precio_entrada, take_profit, fecha_entrada, fecha_salida))
+                    balance -= (riesgo_actual * COMMISSION_PER_TRADE * 2) # Nueva comisión
+                    trade_pnl_net = profit - (riesgo_actual * COMMISSION_PER_TRADE * 2)
+                    trades.append(('SHORT_GANANCIA', precio_entrada, take_profit, fecha_entrada, fecha_salida, trade_pnl_net))
                     trade_executed = True
+                    open_trade_details = None # Trade closed
                     break
             # Si el bucle termina sin break (fin de datos), no se cierra la operación
 
@@ -178,51 +201,48 @@ def realizar_backtest(df: pd.DataFrame, model: Any) -> Tuple[float, List[TradeTu
     # if len(balance_hist) == len(df_processed): # El bucle va hasta len-1
     #      balance_hist.append(balance) # Añadir el último estado si es necesario
 
+    # Log si un trade quedó abierto al final de los datos
+    if open_trade_details is not None:
+        logging.info(
+            f"Note: A {open_trade_details['type']} position entered at {open_trade_details['entry_price']:.5f} "
+            f"on {open_trade_details['entry_date']} (SL: {open_trade_details['sl']:.5f}, TP: {open_trade_details['tp']:.5f}) "
+            f"was still conceptually open at the end of the backtest data and was not closed by this simulation."
+        )
+
     logging.info(f"Backtesting finalizado. Balance final: {balance:.2f}")
     return balance, trades, balance_hist
 
 
 
-# Función para confirmar la señal con indicadores técnicos
-def confirmar_senal_con_indicadores(df: pd.DataFrame) -> Tuple[bool, bool]:
+# Función para confirmar la señal con indicadores técnicos (Optimizada)
+def confirmar_senal_con_indicadores(
+    current_rsi: float,
+    current_macd_diff: float,
+    current_ema_fast: float,
+    current_ema_slow: float
+) -> Tuple[bool, bool]:
     """
-    Confirma señales basadas en la última fila de indicadores calculados sobre el DataFrame.
+    Confirma señales LONG/SHORT basadas en los valores actuales de los indicadores.
 
     Args:
-        df: DataFrame con datos OHLC hasta el punto actual. Debe tener suficientes
-            filas para calcular los indicadores.
+        current_rsi: Valor actual del RSI.
+        current_macd_diff: Valor actual del MACD Diff.
+        current_ema_fast: Valor actual de la EMA rápida.
+        current_ema_slow: Valor actual de la EMA lenta.
 
     Returns:
         Una tupla (confirmar_long, confirmar_short) de booleanos.
     """
-    # Trabajar con copia para evitar SettingWithCopyWarning
-    df_copy = df.copy()
-
-    # Recalcular indicadores sobre el dataframe recibido (hasta el punto actual)
-    df_copy['rsi'] = RSIIndicator(df_copy['close'], window=14).rsi()
-    macd = MACD(df_copy['close'])
-    df_copy['macd_diff'] = macd.macd_diff()
-    df_copy['ema_fast'] = EMAIndicator(df_copy['close'], window=9).ema_indicator()
-    df_copy['ema_slow'] = EMAIndicator(df_copy['close'], window=21).ema_indicator()
-
-    # Comprobar si hay suficientes datos para obtener el último valor
-    if df_copy.empty or df_copy[['rsi', 'macd_diff', 'ema_fast', 'ema_slow']].iloc[-1].isna().any():
-        logging.warning("No hay suficientes datos o hay NaNs en los indicadores para confirmar señal.")
-        return False, False # No confirmar si faltan datos
-
-    # Obtener el último valor de los indicadores
-    rsi: float = df_copy['rsi'].iloc[-1]
-    macd_val: float = df_copy['macd_diff'].iloc[-1]
-    ema_fast: float = df_copy['ema_fast'].iloc[-1]
-    ema_slow: float = df_copy['ema_slow'].iloc[-1]
-
     # Definir condiciones de confirmación
-    confirmar_long: bool = rsi > 50 and macd_val > 0 and ema_fast > ema_slow
-    confirmar_short: bool = rsi < 50 and macd_val < 0 and ema_fast < ema_slow
+    # No es necesario comprobar NaNs aquí, ya se hace antes de llamar
+    confirmar_long: bool = current_rsi > 50 and current_macd_diff > 0 and current_ema_fast > current_ema_slow
+    confirmar_short: bool = current_rsi < 50 and current_macd_diff < 0 and current_ema_fast < current_ema_slow
 
     return confirmar_long, confirmar_short
 
 
+# Note: This function is for live trading position sizing and risk management based on available exchange balance.
+# The backtesting P&L in realizar_backtest uses a simplified model based on a direct percentage of the simulated balance.
 # Función para calcular tamaño de la orden basado en el riesgo y balance actual
 def calcular_cantidad(riesgo: float, stop_loss: float, precio_entrada: float) -> Optional[float]:
     """

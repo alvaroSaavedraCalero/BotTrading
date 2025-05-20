@@ -201,7 +201,7 @@ def entrenar_modelo(
     # --- 3. Limpieza Final de Datos ---
     initial_rows: int = len(df)
     df = df.dropna(subset=['target']) # Asegura que el target calculado sea válido
-    features_cols: List[str] = ['open', 'high', 'low', 'close', 'temporalidad', 'returns', 'rsi', 'macd', 'ema9', 'ema21', 'atr']
+    features_cols: List[str] = ['open', 'high', 'low', 'close', 'returns', 'rsi', 'macd', 'ema9', 'ema21', 'atr']
     # Asegurarse que todas las features existan antes de dropna
     missing_cols = [col for col in features_cols if col not in df.columns]
     if missing_cols:

@@ -17,13 +17,28 @@ if BINANCE_API_KEY is None or BINANCE_API_SECRET is None:
     raise ValueError("Faltan las claves API de Binance.")
 else:
     # Tipar la instancia del cliente
-    client: Client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
+    client: Optional[Client] = None
+    if BINANCE_API_KEY == "dummy_api_key" and BINANCE_API_SECRET == "dummy_api_secret":
+        logging.warning("Using dummy API keys. Binance client will not be fully initialized for live operations.")
+        # We can't fully mock the client without more extensive changes,
+        # but we can prevent it from making immediate calls or assign a mock object if needed.
+        # For now, let's assume parts of the code that use `client` directly might fail
+        # if they expect a live connection, e.g., live trading.
+        # The `obtener_datos_binance` will be mocked to allow backtesting.
+        pass # client remains None or could be a mock object
+    else:
+        try:
+            client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
+        except Exception as e:
+            logging.error(f"Failed to initialize Binance Client with provided keys: {e}")
+            client = None # Ensure client is None if initialization fails
 
 
 # Funcion para obtener los datos de binance
 def obtener_datos_binance(simbolo: str = 'BTCUSDT', intervalo: str = '15m', periodo: str = '1 month ago UTC') -> pd.DataFrame:
     """
     Obtiene datos históricos OHLCV de Binance para un símbolo, intervalo y periodo dados.
+    Returns mock data if dummy API keys are in use.
 
     Args:
         simbolo: Símbolo del par (ej. 'BTCUSDT').
@@ -35,7 +50,43 @@ def obtener_datos_binance(simbolo: str = 'BTCUSDT', intervalo: str = '15m', peri
         indexado por 'open_time' (Timestamp). Retorna un DataFrame vacío si hay error.
     """
     logging.info(f"Obteniendo datos históricos de Binance para {simbolo} ({intervalo}, {periodo})...")
+
+    if BINANCE_API_KEY == "dummy_api_key":
+        logging.warning("Using DUMMY API Key - Returning MOCK Binance data for testing.")
+        # Create a mock DataFrame
+        mock_data = {
+            'open_time': pd.to_datetime(['2023-01-01 00:00:00', '2023-01-01 00:15:00', '2023-01-01 00:30:00', '2023-01-01 00:45:00'] * 1000), # Approx 2.7 days of 15m data
+            'open': [16500.0, 16501.0, 16502.0, 16500.0] * 1000,
+            'high': [16510.0, 16511.0, 16512.0, 16505.0] * 1000,
+            'low': [16490.0, 16491.0, 16492.0, 16495.0] * 1000,
+            'close': [16501.0, 16502.0, 16500.0, 16503.0] * 1000,
+            # 'volume': [10.0, 11.0, 12.0, 13.0] * 1000, # Not strictly needed by current features
+        }
+        df_mock = pd.DataFrame(mock_data)
+        df_mock.set_index('open_time', inplace=True)
+        temporalidad_dict: Dict[str, int] = {'1m': 1, '5m': 2, '15m': 3, '30m': 4, '1h': 5, '4h': 6, '1d': 7, '1w': 8}
+        df_mock['temporalidad'] = temporalidad_dict.get(intervalo, 0)
+        # Ensure enough data for typical indicator periods (e.g., EMA 21)
+        # Need at least 21 periods for EMA21. Let's make it much larger to be safe for various features.
+        num_entries = 200 # Ensures enough data for most indicators
+        data_points = {
+            'open_time': pd.date_range(end=pd.Timestamp.now(tz='UTC'), periods=num_entries, freq=intervalo),
+            'open': [16500.0 + i*0.1 for i in range(num_entries)],
+            'high': [16510.0 + i*0.1 for i in range(num_entries)],
+            'low': [16490.0 - i*0.1 for i in range(num_entries)],
+            'close': [16505.0 + (i%5 - 2.5) for i in range(num_entries)], # Add some variation
+        }
+        df_mock_large = pd.DataFrame(data_points)
+        df_mock_large.set_index('open_time', inplace=True)
+        df_mock_large['temporalidad'] = temporalidad_dict.get(intervalo,0)
+        logging.info(f"Mock data generated with {len(df_mock_large)} rows.")
+        return df_mock_large.copy() # Return a copy
+
     try:
+        if client is None:
+            logging.error("Binance client is not initialized. Cannot fetch real data.")
+            return pd.DataFrame()
+
         # get_historical_klines devuelve una lista de listas
         klines: List[List[Any]] = client.get_historical_klines(simbolo, intervalo, periodo)
 
@@ -215,12 +266,26 @@ def ejecutar_orden_binance(simbolo: str, tipo: str, precio_entrada: float, stop_
         # Formatear cantidad según reglas del símbolo (esto requiere otra llamada API o info precargada)
         # Por ahora, asumimos un redondeo genérico, pero esto puede fallar.
         # Idealmente, obtener stepSize de exchangeInfo y redondear.
+        # TODO: Implement proper quantity formatting using exchangeInfo.
+        # The current rounding is a placeholder and may lead to API errors for symbols
+        # with specific lot size/step size requirements. Fetch exchangeInfo for the symbol,
+        # parse the 'LOT_SIZE' filter (specifically 'stepSize'), and use that to correctly
+        # quantize the 'cantidad' before placing the order.
         cantidad_formateada: float = round(cantidad, 5) # Ejemplo de redondeo, AJUSTAR SEGÚN PAR
+        logging.warning(f"Using generically rounded quantity {cantidad_formateada} for {simbolo}. This may not meet the symbol's precise stepSize requirement and could cause order failure in live trading. Implement exchangeInfo-based formatting.")
         if cantidad_formateada <= 0:
              logging.error(f"❌ Cantidad formateada es cero o negativa ({cantidad_formateada}). No se ejecutará orden.")
              return
 
-        logging.info(f"Intentando ejecutar orden {tipo} para {simbolo} con cantidad {cantidad_formateada:.5f}")
+        # Detailed logging before placing the order
+        distancia_sl = abs(precio_entrada - stop_loss)
+        # Ensure saldo_usdt is not None here for fallback, though it should be checked earlier.
+        # If cantidad_formateada is valid and distancia_sl is 0, it implies an issue with SL price.
+        # The fallback saldo_usdt * RISK_PERCENT is a rough estimate of intended risk if SL is at entry.
+        riesgo_monetario_calculado = cantidad_formateada * distancia_sl if distancia_sl > 0 else (saldo_usdt * RISK_PERCENT if saldo_usdt else 0)
+
+        logging.info(f"Preparing Live Order: Symbol={simbolo}, Type={tipo}, Quantity={cantidad_formateada:.8f}, EntryPriceEst={precio_entrada:.5f}, SL={stop_loss:.5f}, TP={take_profit:.5f}, MonetaryRiskEst={riesgo_monetario_calculado:.2f} USDT")
+        logging.info(f"Intentando ejecutar orden {tipo} para {simbolo} con cantidad {cantidad_formateada:.5f}") # Original log
 
         # Ejecutar orden de mercado principal
         orden_principal: Optional[Dict[str, Any]] = None

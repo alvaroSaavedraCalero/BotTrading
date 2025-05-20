@@ -13,12 +13,13 @@ from models.builder import crear_entrenar_modelo, cargar_modelo
 # from backtestingService.engine import realizar_backtest, TradeTuple # Si está definido ahí
 # O definirlo aquí si es más conveniente:
 from pandas import Timestamp # Asumiendo fechas como Timestamp
-TradeTuple = Tuple[str, float, float, Timestamp, Timestamp]
+# TradeTuple = Tuple[str, float, float, Timestamp, Timestamp] # Definición local eliminada
 # ---
-from backtestingService.engine import realizar_backtest
+from backtestingService.engine import realizar_backtest, TradeTuple # TradeTuple importado
 from reports.exporter import exportar_resultados_excel, generar_dataframe_resultados, mostrar_resultados
 from binanceService.api import obtener_datos_binance
 from utils.enumerados import Modelo, TargetMethod # Importar TargetMethod también
+from config.config import MODEL_SAVE_DIR, REPORTS_DIR, comprobar_variables_entorno
 
 
 # Configuración de logging
@@ -33,6 +34,7 @@ logging.basicConfig(
 
 if __name__ == '__main__':
     logging.info("--- Iniciando Proceso Principal del Bot ---")
+    comprobar_variables_entorno() # Comprobar variables de entorno al inicio
     try:
         # Limpiar pantalla (opcional)
         os.system('cls' if os.name == 'nt' else 'clear')
@@ -42,10 +44,10 @@ if __name__ == '__main__':
         intervalo: str = "15m"
         periodo_entrenamiento: str = "10 years ago UTC" # Separar periodo de entreno y backtest
         periodo_backtest: str = "6 months ago UTC"
-        ruta_modelos: str = rf"C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ModelosEntrenados"
+        ruta_modelos: str = MODEL_SAVE_DIR
         # Ejemplo de ruta para cargar un modelo específico (si se usara)
         # ruta_modelo_a_cargar: Optional[str] = os.path.join(ruta_modelos, "nombre_especifico.joblib")
-        ruta_modelo_a_cargar: Optional[str] = rf"C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ModelosEntrenados\modelo_entrenado_RANDOM_FOREST_BTCUSDC_2025-04-13_19-23-29.joblib" # Poner None para entrenar siempre uno nuevo
+        ruta_modelo_a_cargar: Optional[str] = os.path.join(MODEL_SAVE_DIR, "modelo_entrenado_RANDOM_FOREST_BTCUSDC_2025-04-13_19-23-29.joblib") # Poner None para entrenar siempre uno nuevo
 
         tipo_modelo_enum: Modelo = Modelo.RANDOM_FOREST # Elegir el modelo a entrenar/usar
         metodo_target: TargetMethod = TargetMethod.ATR # Elegir método de target
@@ -127,7 +129,7 @@ if __name__ == '__main__':
              # Exportar a Excel (usa el cálculo interno SIN comisiones para stats finales)
              fecha_hora: str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
              # Considerar usar config.REPORTS_DIR si se definió
-             ruta_reportes: str = rf'C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ResultadosBots'
+             ruta_reportes: str = REPORTS_DIR
              os.makedirs(ruta_reportes, exist_ok=True) # Asegurar que la carpeta exista
              nombre_archivo: str = rf"Resultados_{tipo_modelo_enum.name}_{simbolo}_{intervalo}_{fecha_hora}.xlsx"
              archivo_final: str = os.path.join(ruta_reportes, nombre_archivo)
