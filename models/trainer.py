@@ -157,7 +157,9 @@ def entrenar_modelo(
 ) -> Optional[Any]: # El modelo entrenado (best_estimator_) o None
     """
     Entrena un modelo de clasificación usando datos históricos, adaptado para series temporales,
-    y permitiendo diferentes métodos para definir el target.
+    y permitiendo diferentes métodos para definir el target. Los mismos ``fit_params`` empleados
+    en ``GridSearchCV`` se pasan opcionalmente a ``cross_val_score`` para evaluar con
+    ponderaciones (por ejemplo, ``sample_weight``) coherentes en cada fold.
 
     Args:
         model: Instancia del modelo (scikit-learn, xgboost, etc.) a entrenar.
@@ -326,11 +328,12 @@ def entrenar_modelo(
 
     # --- 8. Opcional: Cross-Validation Score ---
     logging.info("--- Cross-Validation Opcional sobre Conjunto de Entrenamiento ---")
-    # Comprobar si fit_params tiene contenido antes de pasarlo
+    # cross_val_score acepta fit_params; se reutilizan los mismos parámetros
+    # (por ejemplo, sample_weight) empleados en GridSearchCV
     if fit_params:
          cv_params = fit_params
     else:
-         cv_params = None # Pasar None si está vacío
+         cv_params = None  # Pasar None si está vacío
 
     try:
         # scores es ndarray
