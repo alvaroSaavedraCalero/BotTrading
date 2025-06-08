@@ -18,12 +18,5 @@ class TargetMethod(Enum):
 
 
 class Modelo(Enum):
-    """Enumeración de los tipos de modelos de Machine Learning soportados."""
-    GRADIENT_BOOSTING = 1
-    RANDOM_FOREST = 2
-    XGB = 3
-
-    # Alternativa si los valores numéricos específicos no importan:
-    # GRADIENT_BOOSTING = auto()
-    # RANDOM_FOREST = auto()
-    # XGB = auto()
+    """Tipo de modelo de Machine Learning a utilizar."""
+    XGB = 1

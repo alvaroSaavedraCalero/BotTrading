@@ -45,9 +45,9 @@ if __name__ == '__main__':
         ruta_modelos: str = rf"C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ModelosEntrenados"
         # Ejemplo de ruta para cargar un modelo específico (si se usara)
         # ruta_modelo_a_cargar: Optional[str] = os.path.join(ruta_modelos, "nombre_especifico.joblib")
-        ruta_modelo_a_cargar: Optional[str] = rf"C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ModelosEntrenados\modelo_entrenado_RANDOM_FOREST_BTCUSDC_2025-04-13_19-23-29.joblib" # Poner None para entrenar siempre uno nuevo
+        ruta_modelo_a_cargar: Optional[str] = rf"C:\Users\Álvaro\OneDrive\Escritorio\InfoRecursosBots\ModelosEntrenados\modelo_entrenado_XGB_BTCUSDC_2025-04-13_19-23-29.joblib" # Poner None para entrenar siempre uno nuevo
 
-        tipo_modelo_enum: Modelo = Modelo.RANDOM_FOREST # Elegir el modelo a entrenar/usar
+        tipo_modelo_enum: Modelo = Modelo.XGB  # Único modelo disponible
         metodo_target: TargetMethod = TargetMethod.ATR # Elegir método de target
         params_target: Dict[str, Any] = {} # Parámetros para el método de target (ej. {'umbral': 0.0015})
 
