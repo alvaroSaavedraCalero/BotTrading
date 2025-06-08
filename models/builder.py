@@ -8,8 +8,7 @@ import pandas as pd # Necesario para anotar el tipo de df
 import joblib
 
 # Importar clases específicas de modelos para anotaciones
-from sklearn.base import BaseEstimator # O usar clases específicas si prefieres
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.base import BaseEstimator
 from xgboost import XGBClassifier
 
 # Importar Enum y config
@@ -23,11 +22,11 @@ from models.trainer import entrenar_modelo
 
 # Definir un alias de tipo para los posibles modelos generados/entrenados
 # Podrías usar BaseEstimator si todos heredan de él, o ser más específico
-ModelType = Union[GradientBoostingClassifier, RandomForestClassifier, XGBClassifier, BaseEstimator, Any]
+ModelType = XGBClassifier
 
 
 # Funcion para obtener un modelo de 0 sin entrenamiento
-def generar_modelo_nuevo(modelo_enum: Modelo = Modelo.RANDOM_FOREST) -> ModelType:
+def generar_modelo_nuevo(modelo_enum: Modelo = Modelo.XGB) -> ModelType:
     """
     Genera una nueva instancia de un modelo de clasificación sin entrenar.
 
@@ -41,22 +40,16 @@ def generar_modelo_nuevo(modelo_enum: Modelo = Modelo.RANDOM_FOREST) -> ModelTyp
     Raises:
         ValueError: Si el tipo de modelo no es soportado.
     """
-    model_instance: ModelType # Variable para almacenar la instancia
-    if modelo_enum == Modelo.GRADIENT_BOOSTING:
-        logging.info("Generando nuevo modelo GradientBoostingClassifier...")
-        model_instance = GradientBoostingClassifier(n_estimators=N_ESTIMATORS, random_state=RANDOM_STATE)
-    elif modelo_enum == Modelo.RANDOM_FOREST:
-        logging.info("Generando nuevo modelo RandomForestClassifier...")
-        model_instance = RandomForestClassifier(n_estimators=N_ESTIMATORS, random_state=RANDOM_STATE, n_jobs=-1) # Añadir n_jobs
-    elif modelo_enum == Modelo.XGB:
-        logging.info("Generando nuevo modelo XGBClassifier...")
-        # Asegurarse que los parámetros coincidan con los usados en trainer si es relevante
-        model_instance = XGBClassifier(n_estimators=N_ESTIMATORS, random_state=RANDOM_STATE,
-                                       objective='multi:softprob', num_class=3, n_jobs=-1) # Añadir n_jobs
-    else:
-        # Usar modelo_enum.name si existe en el Enum para el mensaje de error
-        raise ValueError(f"Tipo de modelo '{getattr(modelo_enum, 'name', modelo_enum)}' no soportado.")
-
+    model_instance: ModelType
+    logging.info("Generando nuevo modelo XGBClassifier...")
+    model_instance = XGBClassifier(
+        n_estimators=N_ESTIMATORS,
+        random_state=RANDOM_STATE,
+        objective='multi:softprob',
+        num_class=3,
+        n_jobs=-1,
+    )
+    
     return model_instance
 
 
@@ -67,7 +60,7 @@ def guardar_modelo(model: Any, nombre_base_modelo: str, simbolo: str) -> None:
 
     Args:
         model: El objeto del modelo entrenado a guardar. Se usa Any por flexibilidad.
-        nombre_base_modelo: Un nombre base para el archivo (ej. 'RANDOM_FOREST').
+        nombre_base_modelo: Un nombre base para el archivo (ej. 'XGB').
         simbolo: El símbolo para el cual se entrenó el modelo (ej. 'BTCUSDT').
 
     Returns:
@@ -128,7 +121,7 @@ def crear_entrenar_modelo(
     simbolo: str,
     temporalidad: str,
     periodo: str,
-    modelo_enum: Modelo = Modelo.RANDOM_FOREST, # Tipo de modelo a crear si no se carga
+    modelo_enum: Modelo = Modelo.XGB, # Único modelo disponible
     target_method: TargetMethod = TargetMethod.ORIGINAL, # Pasar método de target a entrenar_modelo
     target_params: dict = {} # Pasar params de target a entrenar_modelo
 ) -> Optional[Any]: # Retorna el modelo entrenado o None si falla
@@ -153,14 +146,14 @@ def crear_entrenar_modelo(
     try:
         if ruta_modelo is None:
             logging.info("No se proporcionó ruta, generando nuevo modelo...")
-            model = generar_modelo_nuevo(modelo_enum=modelo_enum)
+            model = generar_modelo_nuevo()
         else:
             try:
                 logging.info(f"Intentando cargar modelo desde: {ruta_modelo}")
                 model = cargar_modelo(ruta_modelo)
             except FileNotFoundError:
                 logging.warning("Modelo no encontrado en la ruta, generando nuevo modelo...")
-                model = generar_modelo_nuevo(modelo_enum=modelo_enum)
+                model = generar_modelo_nuevo()
             except Exception as e_load: # Capturar otros errores de carga
                  logging.error(f"Error inesperado al cargar modelo: {e_load}. Abortando.")
                  return None # No continuar si la carga falla inesperadamente

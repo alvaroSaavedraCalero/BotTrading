@@ -9,9 +9,8 @@ from typing import List, Dict, Any, Optional, Tuple # Importar tipos
 from sklearn.model_selection import GridSearchCV, cross_val_score, TimeSeriesSplit
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
-from sklearn.base import BaseEstimator # Para tipar el modelo genérico
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier # Para tipar en GridSearch (opcional)
-from xgboost import XGBClassifier # Para tipar en GridSearch (opcional)
+from sklearn.base import BaseEstimator
+from xgboost import XGBClassifier
 
 # Importar librerías TA
 from ta.momentum import RSIIndicator
@@ -147,14 +146,14 @@ def definir_target_nivel_alcanzado(df: pd.DataFrame, n_periods: int = 5, umbral_
 # --- Función Principal de Entrenamiento ---
 
 # Usar un tipo genérico para el modelo o Union si se prefiere
-ModelInputType = Any # O Union[GradientBoostingClassifier, RandomForestClassifier, XGBClassifier, BaseEstimator]
+ModelInputType = XGBClassifier
 
 def entrenar_modelo(
     model: ModelInputType,
     df_input: pd.DataFrame,
     target_method: TargetMethod = TargetMethod.ORIGINAL, # Usar el Enum directamente
     target_params: Dict[str, Any] = {}
-) -> Optional[Any]: # El modelo entrenado (best_estimator_) o None
+) -> Optional[ModelInputType]:
     """
     Entrena un modelo de clasificación usando datos históricos, adaptado para series temporales,
     y permitiendo diferentes métodos para definir el target.
@@ -260,33 +259,22 @@ def entrenar_modelo(
     # (El código para configurar param_grid y fit_params según model_name se omite por brevedad,
     # pero debería tener tipos internos si se desea, ej. List[int], List[float], etc.)
     # ... (código de configuración de param_grid y fit_params idéntico al anterior) ...
-    if model_name == 'RandomForestClassifier':
-        model.set_params(class_weight=class_weights_dict, random_state=RANDOM_STATE, n_jobs=-1)
-        param_grid = {
-             'n_estimators': [100, 300], 'max_depth': [5, 7, None], 'max_features': ['sqrt', 'log2'],
-             'min_samples_split': [2, 5, 10], 'min_samples_leaf': [1, 3, 5]
-        }
-    elif model_name == 'GradientBoostingClassifier':
-        model.set_params(random_state=RANDOM_STATE)
-        # sample_weight debe ser un ndarray
-        fit_params['sample_weight'] = y_train.map(class_weights_dict).fillna(1.0).values
-        param_grid = {
-             'n_estimators': [100, 300], 'max_depth': [3, 5, 7], 'learning_rate': [0.05, 0.1],
-             'subsample': [0.8, 1.0]
-        }
-    elif model_name == 'XGBClassifier':
-         num_class: int = len(clases)
-         objective: str = 'multi:softmax' if num_class > 2 else 'binary:logistic'
-         model.set_params(objective=objective, num_class=num_class if num_class > 2 else None, # num_class solo para multi
-                          random_state=RANDOM_STATE, n_jobs=-1)
-         fit_params['sample_weight'] = y_train.map(class_weights_dict).fillna(1.0).values
-         param_grid = {
-             'n_estimators': [100, 300], 'max_depth': [3, 5, 7], 'learning_rate': [0.05, 0.1, 0.2],
-             'subsample': [0.8, 1.0], 'colsample_bytree': [0.8, 1.0]
-         }
-    else:
-        logging.error(f"Modelo '{model_name}' no soportado en tuning automático configurado.")
-        raise ValueError(f"Modelo '{model_name}' no soportado en tuning automático")
+    num_class: int = len(clases)
+    objective: str = 'multi:softmax' if num_class > 2 else 'binary:logistic'
+    model.set_params(
+        objective=objective,
+        num_class=num_class if num_class > 2 else None,
+        random_state=RANDOM_STATE,
+        n_jobs=-1,
+    )
+    fit_params['sample_weight'] = y_train.map(class_weights_dict).fillna(1.0).values
+    param_grid = {
+        'n_estimators': [100, 300],
+        'max_depth': [3, 5, 7],
+        'learning_rate': [0.05, 0.1, 0.2],
+        'subsample': [0.8, 1.0],
+        'colsample_bytree': [0.8, 1.0],
+    }
 
 
     logging.info(f"Iniciando GridSearchCV con {n_splits_cv}-fold TimeSeriesSplit y scoring 'f1_weighted'.")
@@ -299,7 +287,7 @@ def entrenar_modelo(
         logging.info(f"Mejores parámetros encontrados por GridSearchCV: {grid_search.best_params_}")
         logging.info(f"Mejor puntuación F1 ponderada (CV en entreno): {grid_search.best_score_:.4f}")
         # best_estimator_ devuelve el tipo base del estimador, usar Any o ModelInputType
-        best_model: Any = grid_search.best_estimator_
+        best_model: ModelInputType = grid_search.best_estimator_
 
     except Exception as e:
         logging.exception(f"Error durante GridSearchCV: {e}")
