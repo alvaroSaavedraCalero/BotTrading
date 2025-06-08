@@ -334,10 +334,21 @@ def entrenar_modelo(
 
     try:
         # scores es ndarray
-        scores: np.ndarray = cross_val_score(best_model, X_train, y_train, cv=tscv, scoring='f1_weighted',
-                                            params=cv_params, n_jobs=-1) # type: ignore[arg-type] # Ignorar si Pylance se queja de params=None
-        logging.info(f"Cross-Validation F1-Weighted Scores (en entreno): {scores}")
-        logging.info(f"Media CV F1 (entreno): {scores.mean():.4f} (+/- {scores.std() * 2:.4f})")
+        scores: np.ndarray = cross_val_score(
+            best_model,
+            X_train,
+            y_train,
+            cv=tscv,
+            scoring='f1_weighted',
+            fit_params=cv_params,
+            n_jobs=-1,
+        )
+        logging.info(
+            f"Cross-Validation F1-Weighted Scores (en entreno): {scores}"
+        )
+        logging.info(
+            f"Media CV F1 (entreno): {scores.mean():.4f} (+/- {scores.std() * 2:.4f})"
+        )
     except Exception as e:
         logging.warning(f"No se pudo calcular cross_val_score opcional: {e}", exc_info=True)
 
